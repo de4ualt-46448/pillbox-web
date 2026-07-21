@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #a9e5d8; /* MintBackground canvas behind the "phone" */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Reusable neumorphic surface treatments (ported from Theme.kt). */
+@layer components {
+  .neumorphic-card {
+    @apply bg-softSurfaceHighlight shadow-neumorphic rounded-card;
+  }
+  .neumorphic-inset {
+    @apply bg-softSurface shadow-neumorphic-inset rounded-2xl;
+  }
+  .brand-btn {
+    @apply bg-brandGradient text-textOnGradient font-semibold rounded-full shadow-neumorphic-sm;
+  }
+}

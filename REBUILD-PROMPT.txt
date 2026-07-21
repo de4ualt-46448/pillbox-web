@@ -1,0 +1,644 @@
+REBUILD THE PILLBOX-WEB APPLICATION
+=====================================
+
+Create a complete smart pillbox web application with the EXACT structure, features, and behavior described below. This is a monorepo with 3 packages (client, server, hardware-bridge) plus ESP32 firmware.
+
+================================================================================
+PROJECT STRUCTURE
+================================================================================
+
+pillbox-web/
+├── package.json                 # Root workspace config (npm workspaces)
+├── README.md
+├── SETUP-AND-DEPLOY.txt
+├── requirements.txt
+├── go-public.bat
+├── setup.bat
+├── pillbox-setup.bat
+├── client/                      # React frontend
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
+│   ├── public/
+│   │   └── sw.js                # Service worker for push notifications
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx
+│       ├── index.css
+│       ├── types.ts
+│       ├── vite-env.d.ts
+│       ├── store/
+│       │   └── auth.ts          # Zustand auth store
+│       ├── lib/
+│       │   ├── api.ts           # HTTP client with JWT refresh
+│       │   ├── queryClient.ts   # TanStack Query client
+│       │   ├── queries.ts       # All React Query hooks
+│       │   ├── tts.ts           # Text-to-speech (local + cloned)
+│       │   ├── hardwareClient.ts # WebSocket client for hardware bridge
+│       │   ├── prescriptionParser.ts # Regex OCR text parser (fallback)
+│       │   └── push.ts          # Push notification subscription
+│       ├── hooks/
+│       │   └── useReminders.ts  # Client-side reminder scheduler
+│       ├── components/
+│       │   ├── Layout.tsx       # App shell with header
+│       │   ├── BottomNav.tsx    # Floating 3-tab navigation
+│       │   ├── MedicationCard.tsx # Inventory list card
+│       │   ├── StockDrainBar.tsx  # Animated stock fraction bar
+│       │   └── HardwarePanel.tsx  # Slide-up hardware control panel
+│       └── screens/
+│           ├── Auth.tsx         # SignIn + SignUp screens
+│           ├── Inventory.tsx    # Main dashboard
+│           ├── MedicationDetail.tsx # Single medication detail/edit
+│           ├── Scanner.tsx      # Webcam OCR scanner (NVIDIA NIM vision)
+│           ├── ScanReview.tsx   # Review OCR results before save
+│           └── VoiceProfiles.tsx # Voice profile management
+├── server/
+│   ├── .env
+│   ├── .env.example
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── uploads/                 # Stored audio recordings
+│   ├── prisma/
+│   │   ├── schema.prisma
+│   │   ├── dev.db
+│   │   └── migrations/
+│   └── src/
+│       ├── index.ts
+│       ├── config.ts
+│       ├── prisma.ts
+│       ├── auth.ts
+│       ├── hardwareWs.ts
+│       ├── routes/
+│       │   ├── auth.ts
+│       │   ├── medications.ts
+│       │   ├── voice.ts
+│       │   ├── push.ts
+│       │   └── scan.ts
+│       └── voice/
+│           └── elevenlabs.ts
+├── hardware-bridge/
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── src/
+│       └── index.ts
+└── esp32/
+    ├── README.md
+    └── firmware/
+        └── firmware.ino
+
+================================================================================
+FRAMEWORKS & LIBRARIES (use exact versions)
+================================================================================
+
+CLIENT:
+- react@18.3.1, react-dom@18.3.1
+- react-router-dom@6.28.0
+- typescript@5.7.2
+- vite@8.1.5
+- tailwindcss@3.4.15, autoprefixer@10.4.20, postcss@8.4.49
+- zustand@5.0.2
+- @tanstack/react-query@5.62.0
+- react-hook-form@7.54.0, @hookform/resolvers@3.9.1
+- zod@3.23.8
+- react-webcam@7.2.0
+- date-fns@4.1.0
+
+SERVER:
+- express@4.21.1
+- typescript@5.7.2
+- prisma@5.22.0, @prisma/client@5.22.0
+- bcryptjs@2.4.3
+- jsonwebtoken@9.0.2
+- cors@2.8.5
+- helmet@8.3.0
+- express-rate-limit@8.6.0
+- express-validator@7.3.2
+- multer@2.2.0
+- ws@8.18.0
+- web-push@3.6.7
+- zod@3.23.8
+- dotenv@16.4.5
+- tsx@4.19.2
+
+HARDWARE BRIDGE:
+- ws@8.18.0
+- node:net (built-in)
+- tsx@4.19.2
+
+================================================================================
+DATABASE SCHEMA (Prisma + SQLite)
+================================================================================
+
+Prisma schema with these 5 models:
+
+MODEL User {
+  id             String          @id @default(cuid())
+  email          String          @unique
+  passwordHash   String
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  medications    Medication[]
+  voiceProfiles  VoiceProfile[]
+  pushSubscriptions PushSubscription[]
+}
+
+MODEL Medication {
+  id                 String        @id @default(cuid())
+  userId             String
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name               String
+  dosage             String
+  frequencyRaw       String
+  timesOfDay         String        // comma-separated HH:mm strings like "08:00,14:00,20:00"
+  totalQuantity      Int
+  pillsRemaining     Int
+  quantityPerDose    Int           @default(1)
+  notes              String?
+  refillDate         DateTime?
+  voiceProfileId     String?
+  voiceProfile       VoiceProfile? @relation(fields: [voiceProfileId], references: [id], onDelete: SetNull)
+  lowStockThreshold  Int           @default(5)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  doseLogs           DoseLog[]
+
+  @@index([userId])
+}
+
+MODEL VoiceProfile {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName     String
+  engine          String        // "LOCAL_TTS" | "CLONED_REMOTE" | "RECORDED"
+  localeTag       String?
+  remoteVoiceId   String?
+  audioPath       String?
+  isDefault       Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  medications     Medication[]
+
+  @@index([userId])
+}
+
+MODEL DoseLog {
+  id              String      @id @default(cuid())
+  medicationId    String
+  medication      Medication  @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  quantity        Int
+  source          String      // "manual" | "hardware" | "simulated"
+  takenAt         DateTime    @default(now())
+
+  @@index([medicationId])
+  @@index([takenAt])
+}
+
+MODEL PushSubscription {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint    String
+  p256dh      String
+  auth        String
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, endpoint])
+  @@index([userId])
+}
+
+================================================================================
+ENVIRONMENT VARIABLES
+================================================================================
+
+SERVER .env.example:
+  DATABASE_URL="file:./dev.db"
+  JWT_SECRET="change-me-in-production"
+  JWT_REFRESH_SECRET="change-me-in-production"
+  CLIENT_ORIGIN=""
+  ELEVENLABS_API_KEY=""
+  NVIDIA_API_KEY=""
+  NVIDIA_OCR_MODEL="meta/llama-3.2-90b-vision-instruct"
+  PORT=4000
+  VAPID_PUBLIC_KEY=""
+  VAPID_PRIVATE_KEY=""
+
+Validate ALL env vars at startup using Zod in server/src/config.ts. Exit process if invalid.
+
+================================================================================
+COMPLETE FEATURE SET (build ALL of these)
+================================================================================
+
+--- 1. USER AUTHENTICATION ---
+- Email + password signup and signin (minimum 6 char password)
+- JWT access tokens (15-minute TTL) stored in localStorage
+- Refresh tokens via httpOnly cookie (pillbox_refresh, 7-day TTL, sameSite lax, secure in prod)
+- Automatic token refresh on 401 responses (api.ts request() function handles this)
+- Session bootstrap on app load (GET /api/auth/me)
+- Sign out clears cookie + token
+- Rate limiting: 15 attempts per 15 min per IP on auth endpoints
+- Passwords hashed with bcrypt (10 rounds)
+
+--- 2. MEDICATION INVENTORY ("The Green Menu") ---
+- Searchable list of medication cards, sorted alphabetically
+- Low-stock banner when any medication is below its threshold
+- Each card shows: pill emoji icon, name, dosage, frequency, gradient "X left" badge (turns red when low)
+- StockDrainBar: animated horizontal bar showing pillsRemaining / totalQuantity as a fraction
+  - Width = fraction * 100%
+  - Color = green gradient when healthy, red gradient when low
+  - Smooth CSS transition on width change
+- Floating "+" button to add new medications via scanner
+
+--- 3. MEDICATION DETAIL SCREEN ---
+- Hero image area with pill emoji
+- Name, frequency, dosage display
+- Edit mode: inline editing of name, dosage, frequency, notes with "SAVE CHANGES" button
+- Stock stepper: +/- buttons to adjust pill count, with "SAVE" button
+- Dose history log (shows quantity, source icon, timestamp)
+- Delete with confirmation modal
+- Shows quantityPerDose, notes, pill count
+
+--- 4. CAMERA OCR SCANNER ---
+- Two modes: "Bottle label" and "Prescription"
+- Uses react-webcam for live camera feed
+- NVIDIA NIM vision OCR (hosted vision LLM: meta/llama-3.2-90b-vision-instruct via ai.api.nvidia.com)
+- Server-side proxy endpoint POST /api/scan/ocr accepts image (data URL or multipart file), forwards to NVIDIA with structured JSON prompt, returns both raw text and structured parsed fields
+- Live scan loop: polls webcam frame every ~2.5s, sends to server; stable result (same medication name 2x) auto-advances to review
+- Manual capture button for one-shot OCR
+- Upload photo button for image file OCR
+- Canvas-based image preprocessing (draws webcam frame to canvas for reliable JPEG encoding)
+- No Tesseract.js in browser — model runs in NVIDIA's cloud, keeping client bundle smaller
+
+--- 5. SCAN REVIEW SCREEN ---
+- Receives either NVIDIA structured parsed data (preferred) or falls back to regex parser
+- Pre-fills fields from either NVIDIA parsed response or prescriptionParser regex extraction
+- Editable fields: name, dosage, frequency, times (comma-separated HH:mm), total quantity, pills per dose
+- In "prescription" mode: highlights detected reminder timers
+- "Retake" returns to scanner; "Save to Inventory" / "Save + add timers" creates the medication
+
+--- 6. PRESCRIPTION PARSER (lib/prescriptionParser.ts) ---
+- Regex-based extraction from OCR text (port from Android PrescriptionParser.kt)
+- Extracts: dosage (mg/mcg/ml/g/IU), quantity, pills per dose, times (HH:mm), frequency patterns (once/twice/thrice daily, every N hours)
+- Name detection: first line 3-40 chars containing letters but not dosage patterns
+- USED AS FALLBACK ONLY when NVIDIA vision model doesn't return structured data or fails
+
+--- 7. VOICE PROFILES ---
+- Three voice engines:
+  - LOCAL_TTS: Browser's Web Speech API (SpeechSynthesis)
+  - CLONED_REMOTE: ElevenLabs voice cloning (server-side API key)
+  - RECORDED: User-recorded audio clip played back as alarm
+- Profile management: create, delete, set default, preview
+- Recording UI: MediaRecorder API, start/stop, preview playback, re-record, save
+- Clone UI: records a sample, uploads via FormData to server, server calls ElevenLabs API
+- Default voice is used for all medication reminders
+- Error handling for ElevenLabs permission issues
+
+--- 8. CLIENT-SIDE REMINDERS (hooks/useReminders.ts) ---
+- Polls every 20 seconds checking all timesOfDay slots against current time
+- 60-second fire window per slot per day
+- Fires browser Notification API notification
+- Plays voice reminder via the default voice profile
+- Tracks firedToday Set keyed by "date:medId:time" to prevent duplicate fires
+- Requests notification permission on first load
+
+--- 9. PUSH NOTIFICATIONS ---
+- Service worker (sw.js) handles push events
+- VAPID key exchange with server
+- Subscribe/unsubscribe flow
+- Push payload includes medicationId and notification actions ("Taken" / "Snooze 15min")
+- Snooze re-shows notification after 15 minutes
+- Click opens/focuses the app
+- Server sends push to all user subscriptions when reminders fire
+
+--- 10. HARDWARE CONNECTOR (ESP32 "Z Care" Pillbox) ---
+NO SIMULATOR. Only real hardware mode.
+
+Data Flow Chain:
+  Browser (WebSocket) -> Server (WebSocket relay) -> hardware-bridge (TCP) -> ESP32
+
+Server WebSocket (/ws/hardware):
+- Three connection roles: web (authenticated browser), bridge (local relay agent)
+- Bridge connections: receives schedule, dispense commands, audio bytes; sends dose events, hello, getSchedule
+- Web connections: can send refreshSchedule and reminder messages; receives dose-ack, hardware-offline, error
+
+Hardware Bridge (hardware-bridge/src/index.ts):
+- Connects to server via WebSocket as role=bridge
+- Opens two TCP sockets to ESP32:
+  - AUDIO socket (BOX_PORT, default 5000): 4-byte little-endian length prefix + raw MP3 bytes
+  - CONTROL socket (BOX_PORT+1, default 5001): newline-delimited JSON both directions
+- On connect: sends {"type":"hello"} and {"type":"getSchedule"}
+- Forwards server JSON messages to control socket; forwards server binary frames to audio socket (with length header)
+- Forwards board control JSON to server
+
+Environment variables for bridge:
+  SERVER_URL="ws://localhost:4000/ws/hardware?role=bridge"
+  BOX_HOST="192.168.4.1"
+  BOX_PORT=5000
+
+Protocol Messages:
+- Board -> Bridge -> Server:
+  {"type":"hello","firmware":"1.0.0","slots":8}
+  {"type":"getSchedule"}
+  {"type":"dose","slot":0,"ok":true,"ts":"..."}  (IR break-beam confirmed drop)
+- Server -> Bridge -> Board:
+  {"type":"schedule","meds":[{"slot":0,"name":"Aspirin","dose":2,"times":["08:00"]}]}
+  {"type":"dispense","slot":0,"dose":2}
+  Binary frame: 4-byte LE length + MP3 audio data
+
+================================================================================
+API ENDPOINTS (server routes)
+================================================================================
+
+AUTH (server/src/routes/auth.ts):
+  POST /api/auth/signup     - body: {email, password}
+  POST /api/auth/signin     - body: {email, password}
+  POST /api/auth/refresh    - reads refresh cookie, returns new access token
+  POST /api/auth/signout    - clears refresh cookie
+  GET  /api/auth/me         - requires auth, returns user object
+
+MEDICATIONS (server/src/routes/medications.ts) - all require auth:
+  GET    /api/medications              - list all user's medications
+  POST   /api/medications              - create medication (name, dosage, frequencyRaw, timesOfDay, totalQuantity, pillsRemaining, quantityPerDose, notes, voiceProfileId, lowStockThreshold)
+  GET    /api/medications/:id          - get single medication
+  PATCH  /api/medications/:id          - update medication fields
+  PATCH  /api/medications/:id/stock    - set pillsRemaining directly
+  POST   /api/medications/:id/dose-taken - record a dose (decrements stock by quantityPerDose, creates DoseLog)
+  GET    /api/medications/:id/dose-history - get dose log entries
+  DELETE /api/medications/:id          - delete medication
+
+VOICE (server/src/routes/voice.ts) - all require auth:
+  GET    /api/voice                         - list voice profiles
+  POST   /api/voice                         - create local TTS profile (body: displayName, localeTag)
+  POST   /api/voice/clone                   - upload sample file + displayName, clone via ElevenLabs
+  POST   /api/voice/record                  - upload recorded audio clip + displayName
+  GET    /api/voice/recording/:id           - stream stored recording file
+  POST   /api/voice/:id/default             - set as default voice
+  GET    /api/voice/synthesize/:voiceId?text= - get synthesized audio (MP3)
+  DELETE /api/voice/:id                     - delete voice profile
+
+PUSH (server/src/routes/push.ts) - all require auth:
+  GET  /api/push/vapid-key      - get VAPID public key
+  POST /api/push/subscribe      - save push subscription (endpoint, p256dh, auth)
+  POST /api/push/unsubscribe    - remove push subscription by endpoint
+
+SCAN (server/src/routes/scan.ts) - requires auth:
+  POST /api/scan/ocr            - OCR via NVIDIA NIM vision model
+    Accepts multipart/form-data (field "image") or JSON {dataUrl}
+    Returns { rawText, parsed: {name, dosage, frequency, timesOfDay, totalQuantity, quantityPerDose} }
+
+HEALTH:
+  GET /api/health               - returns {ok: true, timestamp}
+
+SCAN (server/src/routes/scan.ts) - requires auth:
+  POST /api/scan/ocr  - multipart/form-data (field "image") OR JSON {dataUrl}
+                      - returns { rawText, parsed: { name, dosage, frequency, timesOfDay[], totalQuantity, quantityPerDose } }
+                      - proxies image to NVIDIA NIM vision LLM with structured JSON extraction prompt
+
+================================================================================
+TAILWIND CSS NEUMORPHIC THEME
+================================================================================
+
+Custom colors:
+  mintBackground: "#A9E5D8"
+  softSurface: "#EFF3F1"
+  forestGreen: "#1B7A5C"
+  sageGreen: "#7FC8A9"
+  mintGreen: "#3DD9B4"
+  tealAccent: "#2FB9C6"
+  paleMint: "#D0F0E8"
+  lowStockRed: "#E5695A"
+  warningAmber: "#F5A623"
+  textPrimary: "#2D3436"
+  textSecondary: "#636E72"
+
+Custom gradients:
+  brandGradient: ["#2FB9C6", "#3DD9B4"] (135deg)
+  progressHealthy: ["#1B7A5C", "#3DD9B4"] (90deg)
+  progressLow: ["#F5A623", "#E5695A"] (90deg)
+
+Custom box shadows:
+  neumorphic: "6px 6px 12px #d1d9d6, -6px -6px 12px #ffffff"
+  neumorphic-sm: "3px 3px 6px #d1d9d6, -3px -3px 6px #ffffff"
+  neumorphic-inset: "inset 4px 4px 8px #d1d9d6, inset -4px -4px 8px #ffffff"
+
+Custom border radius:
+  card: "18px"
+
+CSS Utilities (index.css):
+  .neumorphic-card: background white, box-shadow neumorphic, border-radius card
+  .neumorphic-inset: background softSurface, box-shadow neumorphic-inset, border-radius card
+  .brand-btn: background-gradient brandGradient, color white, border-radius full, shadow neumorphic-sm
+
+Design principles:
+  - Mobile-first (max-w-md centered container)
+  - Full-height flex layout
+  - Fixed bottom navigation with floating card style
+  - Slide-up panels for modals
+  - Consistent spacing via Tailwind gap utilities
+
+================================================================================
+COMPONENT DETAILS
+================================================================================
+
+Layout.tsx:
+- App shell with header showing signed-in user email
+- Hardware status indicator (green dot when connected)
+- Sign-out button
+- Connects hardware WebSocket on mount
+- Runs useReminders hook
+- Renders Outlet for child routes
+- Opens HardwarePanel on hardware button click
+
+BottomNav.tsx:
+- Fixed floating bottom navigation bar (neumorphic card style)
+- Three tabs with emoji icons: "Add" (scanner), "Inventory" (home), "Voices" (voice-profiles)
+- Highlights active tab with paleMint background
+
+MedicationCard.tsx:
+- Inventory list item
+- Circular pill icon, name, dosage+frequency subtitle
+- Gradient "X left" badge (green or red based on low stock)
+- StockDrainBar underneath
+- Clickable, navigates to detail route /medication/:id
+
+StockDrainBar.tsx:
+- Horizontal progress bar
+- Width = fraction * 100%
+- Color = green gradient when healthy, red gradient when low
+- Smooth CSS transition on width change
+
+HardwarePanel.tsx:
+- Full-screen slide-up modal
+- Shows relay/board connection status
+- Medication selector dropdown
+- Dispense button
+- Pill quantity stepper
+- Activity event log (last 30 entries)
+- Supports real hardware flows only (NO simulator)
+
+Auth.tsx:
+- Two form screens with neumorphic card shell
+- Email + password fields
+- Error display
+- Link to switch between sign-in/sign-up
+- Uses useAuth store directly
+
+Inventory.tsx:
+- Search bar
+- Low-stock banner
+- Push notification toggle switch
+- Reminder timers display (shows each medication's time slots)
+- Medication card list (filtered/sorted)
+- Floating "+" button that navigates to /scanner
+
+MedicationDetail.tsx:
+- Back button, edit/delete in header
+- Hero image area with pill emoji
+- Name/frequency card, dosage card, pills-per-dose card, notes card
+- Stock stepper (+/- buttons + SAVE)
+- Dose history log
+- Delete confirmation modal
+- Edit mode toggles inline input fields
+
+Scanner.tsx:
+- Camera scanner with mode toggle (label/prescription)
+- Webcam feed with targeting overlay
+- Manual capture button
+- File upload button
+- Live OCR text display panel (shows NVIDIA returned rawText or parsed name)
+- Sends captured frames to POST /api/scan/ocr (base64 data URL via api.post)
+- Polls every ~2.5s during live scan; stable result (same medication name 2x) auto-advances
+- No Tesseract.js - uses NVIDIA NIM vision model via server proxy
+
+ScanReview.tsx:
+- Review scanned data
+- Prescription mode shows timer detection banner
+- Uses NVIDIA structured parsed data when available; falls back to regex parser (prescriptionParser)
+- Editable fields for all parsed medication data
+- Retake or Save buttons
+- Creates medication on save
+
+VoiceProfiles.tsx:
+- Voice management list with profile cards
+- Preview/play, select (set default), delete buttons
+- "Add voice profile" button opens bottom sheet
+- Bottom sheet with three tabs: Built-in (LOCAL_TTS), Clone (CLONED_REMOTE), Record (RECORDED)
+- Recording UI: start/stop, preview, re-record, save
+- Clone UI: records sample, uploads to server
+
+================================================================================
+STATE MANAGEMENT
+================================================================================
+
+Zustand store (store/auth.ts):
+- State: user (AuthUser | null), ready (boolean)
+- Actions: bootstrap(), signup(), signin(), signout()
+- Bootstrap: checks localStorage for token, calls /auth/me
+- Signup/Signin: POST to server, store access token, set user
+- Signout: POST to server (clears cookie), clear token, clear user
+
+TanStack React Query (lib/queries.ts):
+- Query keys: medKeys.all = ["medications"], voiceKeys.all = ["voice-profiles"]
+- Medication hooks: useMedications, useCreateMedication, useUpdateMedication, useDeleteMedication, useSetStock, useRecordDose, useDoseHistory
+- Voice hooks: useVoiceProfiles, useCreateLocalVoice, useCloneVoice, useRecordedVoice, useDeleteVoice, useSetDefaultVoice
+- All mutation onSuccess handlers invalidate relevant queries AND call hardwareClient.refreshSchedule()
+- Default QueryClient: 1 retry, no refetch on window focus
+
+API Client (lib/api.ts):
+- Singleton access token in module scope, persisted to localStorage
+- request() function handles: auth header injection, JSON/FormData body, 401 auto-refresh retry
+- Exported as api.get/post/patch/del/upload
+
+================================================================================
+API CLIENT (lib/api.ts) IMPLEMENTATION
+================================================================================
+
+- Module-level variable: let accessToken: string | null = localStorage.getItem('pillbox_token')
+- On 401 response: try POST /api/auth/refresh, if success retry original request with new token
+- If refresh fails: call onUnauthorized callback (signs out user)
+- request() function: adds Authorization: Bearer header, handles JSON body serialization, handles FormData body (no content-type header)
+- Export object: { get, post, patch, del, upload } where upload uses FormData
+
+================================================================================
+HARDWARE WEBSOCKET CLIENT (lib/hardwareClient.ts)
+================================================================================
+
+- Connects to ws://host/ws/hardware?role=web&token=<jwt>
+- Handles incoming messages: dose-ack, hardware-offline, error
+- Can send: refreshSchedule, reminder
+- Exposes: connect(), disconnect(), refreshSchedule(), reminder(medId)
+- Connection state tracked for UI indicator
+
+================================================================================
+ESP32 FIRMWARE (esp32/firmware/firmware.ino)
+================================================================================
+
+Arduino/C++ firmware with these libraries:
+- WiFi (built-in)
+- ArduinoJson >= 6
+- Servo (built-in)
+- Adafruit GFX + Adafruit SSD1306 (OLED display)
+- Adafruit NeoPixel (LED strip)
+- NTPClient (time sync)
+- ESP8266Audio (optional, for I2S DAC audio playback)
+
+Wiring:
+  Servo (carousel): GPIO 13
+  IR break-beam: GPIO 14 (LOW = beam broken)
+  Buzzer: GPIO 15
+  NeoPixel LEDs (8px): GPIO 2
+  OLED SSD1306 (I2C): SDA 21, SCL 22
+  I2S DAC MAX98357A: BCLK 26, LRC 25, DOUT 33
+
+Protocol:
+- Connects to WiFi, then opens TCP sockets to bridge host
+- Control socket: reads/writes newline-delimited JSON
+- Audio socket: reads 4-byte LE length + MP3 data, plays via I2S DAC
+- Dispense sequence: rotate servo to slot angle, pulse buzzer + NeoPixels, wait for IR break-beam (20s timeout), report dose or missed
+- SELF_TEST mode: simulates a pill drop 3 seconds after dispense without real IR sensor
+
+================================================================================
+DEPLOYMENT INSTRUCTIONS
+================================================================================
+
+Local Development:
+1. npm install (installs all workspaces)
+2. npm run prisma:generate && npm run prisma:migrate
+3. npm run dev:server (port 4000) + npm run dev:client (port 5173)
+
+Production:
+1. Set DATABASE_URL to PostgreSQL
+2. Set strong JWT_SECRET and JWT_REFRESH_SECRET
+3. Build client: npm run build -w client
+4. Server serves built client from client/dist as static files
+5. Expose via Cloudflare Tunnel: cloudflared tunnel --url http://localhost:4000
+6. Update CLIENT_ORIGIN in .env for CORS
+
+Hardware Bridge:
+1. Flash ESP32 firmware with WiFi credentials + bridge host IP
+2. Run bridge: BOX_HOST=<ESP32_IP> npm run dev:bridge
+3. Bridge connects to server WS + ESP32 TCP, relays bidirectionally
+
+================================================================================
+IMPORTANT NOTES
+================================================================================
+
+1. NO SIMULATOR. The HardwarePanel only supports real hardware connections via the bridge.
+2. The project uses npm workspaces with 3 packages: client, server, hardware-bridge.
+3. The server uses tsx for direct TypeScript execution (no build step needed for dev).
+4. All medication and voice routes require authentication.
+5. User data isolation: all queries filter by userId.
+6. ElevenLabs API key stays server-side only.
+7. File uploads limited to 25MB via multer.
+8. Environment variables validated at startup with Zod.
+9. The prescription parser is ported from an Android Kotlin file - use the same regex patterns.
+10. The scanner uses NVIDIA NIM vision OCR (meta/llama-3.2-90b-vision-instruct) instead of Tesseract.js. The server proxies requests to NVIDIA's API at ai.api.nvidia.com/v1/gr/meta/llama-3.2-90b-vision-instruct. The client sends base64 data URLs to POST /api/scan/ocr and receives structured JSON + raw text. The prescriptionParser regex is kept as a fallback when NVIDIA returns unstructured text.
+11. The useReminders hook uses useRef for firedToday Set to persist across renders without re-triggering.
+12. All mutations in queries.ts must call hardwareClient.refreshSchedule() on success.
+13. The neumorphic design system is critical to the app's visual identity - match the colors, shadows, and gradients exactly.
+14. The BottomNav is a floating fixed-position bar, not a standard bottom navigation.
+15. The HardwarePanel is a full-screen slide-up modal, not a sidebar or popup.

@@ -1,0 +1,106 @@
+===============================================
+  PILLBOX WEB - LOCALHOST TO PUBLIC (CLOUDFLARE)
+===============================================
+
+PREREQUISITES
+-------------
+1. Install Node.js 18+ from https://nodejs.org
+2. Install Cloudflared from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+
+
+STEP 1: INSTALL DEPENDENCIES
+-----------------------------
+  cd server
+  npm install
+
+  cd ..\client
+  npm install
+
+
+STEP 2: SET UP THE DATABASE
+----------------------------
+  cd ..\server
+  npx prisma generate
+  npx prisma migrate dev
+
+
+STEP 3: RUN LOCALLY (localhost only)
+-------------------------------------
+  Terminal 1 - Start the server:
+    cd server
+    npx tsx src/index.ts
+
+    Server runs at: http://localhost:4000
+
+  Terminal 2 - Start the client:
+    cd client
+    npm run dev
+
+    Client runs at: http://localhost:5173
+
+
+STEP 4: EXPOSE TO THE INTERNET VIA CLOUDFLARE
+----------------------------------------------
+
+Option A - Quick tunnel (no Cloudflare account needed, temporary URL):
+  cloudflared tunnel --url http://localhost:4000
+
+  This gives you a URL like: https://random-words.trycloudflare.com
+  Share that URL with anyone.
+
+Option B - Named tunnel (persistent URL, requires free Cloudflare account):
+
+  1. Login to Cloudflare:
+     cloudflared tunnel login
+
+  2. Create a tunnel:
+     cloudflared tunnel create pillbox
+
+  3. Route DNS to the tunnel:
+     cloudflared tunnel route dns pillbox pillbox.yourdomain.com
+     (or use a free trycloudflare subdomain)
+
+  4. Create config file (cloudflared-config.yml):
+     tunnel: <YOUR_TUNNEL_ID>
+     credentials-file: <path-to-credentials-file>
+
+     ingress:
+       - hostname: pillbox.yourdomain.com
+         service: http://localhost:4000
+       - service: http_status:404
+
+  5. Run the tunnel:
+     cloudflared tunnel run pillbox
+
+
+STEP 5: UPDATE SERVER ENV FOR PUBLIC ACCESS
+--------------------------------------------
+  Edit server\.env and set:
+    CLIENT_ORIGIN=https://pillbox.yourdomain.com
+    (or your trycloudflare URL)
+
+  This locks CORS so only YOUR public URL can make API requests.
+
+
+QUICK START (copy-paste)
+-------------------------
+  # Terminal 1
+  cd C:\Users\Admin\projects\pillbox-web\server
+  npx prisma generate
+  npx prisma migrate dev
+  npx tsx src/index.ts
+
+  # Terminal 2
+  cd C:\Users\Admin\projects\pillbox-web\client
+  npm run dev
+
+  # Terminal 3 (after server is running)
+  cloudflared tunnel --url http://localhost:4000
+
+
+NOTES
+-----
+- The Cloudflare quick tunnel URL changes each time you restart it.
+- For a permanent URL, use Option B (named tunnel) with a domain you own.
+- Push notifications require HTTPS, which Cloudflare provides automatically.
+- NEVER commit your .env file with real API keys to git.

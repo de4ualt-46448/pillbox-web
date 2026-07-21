@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String          @id @default(cuid())
+  email         String          @unique
+  passwordHash  String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  medications   Medication[]
+  voiceProfiles VoiceProfile[]
+  pushSubscriptions PushSubscription[]
+}
+
+model Medication {
+  id                String         @id @default(cuid())
+  userId            String
+  name              String
+  dosage            String
+  frequencyRaw      String
+  timesOfDay        String         // comma-separated HH:mm
+  totalQuantity     Int
+  pillsRemaining    Int
+  quantityPerDose   Int            @default(1)
+  notes             String         @default("")
+  refillDate        DateTime?
+  voiceProfileId    String?
+  lowStockThreshold Int            @default(5)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  voiceProfile      VoiceProfile?  @relation(fields: [voiceProfileId], references: [id], onDelete: SetNull)
+  doseLogs          DoseLog[]
+}
+
+model VoiceProfile {
+  id            String   @id @default(cuid())
+  userId        String
+  displayName   String
+  engine        String   // LOCAL_TTS | CLONED_REMOTE | RECORDED
+  localeTag     String?
+  remoteVoiceId String?
+  audioPath     String?  // stored recording file name (RECORDED engine)
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  medications   Medication[]
+}
+
+model DoseLog {
+  id            String   @id @default(cuid())
+  medicationId  String
+  quantity      Int      @default(1)
+  source        String   @default("manual") // manual | hardware | simulated
+  takenAt       DateTime @default(now())
+  medication    Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+
+  @@index([medicationId])
+  @@index([takenAt])
+}
+
+model PushSubscription {
+  id            String   @id @default(cuid())
+  userId        String
+  endpoint      String
+  p256dh        String
+  auth          String
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, endpoint])
+}

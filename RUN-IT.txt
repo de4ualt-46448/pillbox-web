@@ -1,0 +1,98 @@
+Pillbox — Run It (ESP32 over MQTT)
+===================================
+
+The web app talks to the ESP32 through an MQTT broker that runs INSIDE the
+Node server. The ESP32 uses MQTT over TCP; the browser uses MQTT over
+WebSocket. No Firebase, no cloud broker required.
+
+Broker endpoints (started automatically by `npm run dev`):
+  - TCP   192.168.x.x:1883   (ESP32 connects here)
+  - WS    ws://localhost:8888 (browser connects here)
+
+Topic model (device id = "pillbox-01"):
+  pillbox/pillbox-01/cmd       web  -> board   {type:"dispense"|"schedule"}
+  pillbox/pillbox-01/request  board-> server  {type:"getSchedule"}  (on boot)
+  pillbox/pillbox-01/dose      board-> web+svr {type:"dose", medicationId}
+  pillbox/pillbox-01/status    board-> web     {online:true, lastSeen}
+
+------------------------------------------------------------------------
+1. Run the server (starts the MQTT broker automatically)
+------------------------------------------------------------------------
+From the project root:
+
+    npm install
+    npm run dev          (starts the server; MQTT broker boots with it)
+
+Watch the server log for:
+    [mqtt] TCP broker listening on 1883
+    [mqtt] WebSocket broker listening on 8888
+    [mqtt] server subscriber connected
+
+Note: the server needs its database/Prisma set up (see SETUP-AND-DEPLOY.txt
+or the existing README) before it fully starts. The MQTT broker itself does
+not require the DB.
+
+------------------------------------------------------------------------
+2. Flash the ESP32 firmware
+------------------------------------------------------------------------
+a) In the Arduino IDE / PlatformIO, install the library:
+     "PubSubClient" by Nick O'Leary  (version >= 2.8)
+
+b) Open: esp32/firmware/firmware.ino
+
+c) Set your WiFi + broker host near the top:
+     #define WIFI_SSID      "YOUR_WIFI_SSID"
+     #define WIFI_PASSWORD  "YOUR_WIFI_PASSWORD"
+     #define BROKER_HOST    "192.168.4.10"   // IP of the machine running the server
+
+d) Select your ESP32 board + port, compile and upload.
+
+e) Open Serial Monitor (115200). You should see:
+     WiFi connected
+     MQTT connected
+     Linked mqtt ok
+   and the OLED shows "Online".
+
+------------------------------------------------------------------------
+3. Run the web app
+------------------------------------------------------------------------
+In a separate terminal (still from the project root):
+
+    npm run dev   (if not already running) — or use the client dev server:
+    cd client && npm run dev
+
+Open the app, sign in, and go to the medication screens. The Hardware panel
+shows the board as online once the ESP32 connects and starts heartbeating.
+
+------------------------------------------------------------------------
+4. How it works end to end
+------------------------------------------------------------------------
+- The app's `client/src/lib/mqttClient.ts` (exported as `hardwareClient`)
+  connects over WebSocket to the broker and publishes `dispense` commands.
+- The ESP32 (`firmware.ino`) subscribes to `pillbox/pillbox-01/cmd`, opens
+  the correct slot, buzzes + lights up, and on a confirmed pill drop
+  publishes a `dose` event.
+- The server (`server/src/mqttBroker.ts`) also subscribes to `dose` and
+  decrements the medication stock in the database + sends a push.
+- On boot the ESP32 publishes `request` -> server answers with the schedule.
+
+------------------------------------------------------------------------
+5. Self-test (no pill / no IR sensor needed)
+------------------------------------------------------------------------
+In firmware.ino set:
+
+    #define SELF_TEST 1
+
+The board reports a "pill dropped" ~3s after each dispense, so you can verify
+the full app -> MQTT -> ESP32 -> MQTT -> server -> stock-decrement chain.
+Set it back to 0 for real use.
+
+Or use the in-app "Simulate" button (Hardware panel) which publishes a dose
+through the broker without any hardware.
+
+------------------------------------------------------------------------
+Security note
+------------------------------------------------------------------------
+This is a local, unauthenticated MQTT broker for development. Before any
+public/remote deployment, put it behind TLS + authentication (e.g. an MQTT
+broker with user/pass or client certificates) and lock down the topics.
