@@ -18,7 +18,7 @@ scanRouter.use(requireAuth);
 
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.2-90b-vision-preview";
+const GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 
 const SCAN_PROMPT = `You are an OCR engine for a medication app. You are given a photo of either a pill-bottle label or a printed prescription. Extract the following details.
 

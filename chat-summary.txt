@@ -1,0 +1,80 @@
+============================================
+  PILLBOX WEB - CHAT SUMMARY
+  Date: July 22, 2026
+============================================
+
+REQUEST 1: Create a .bat file to auto-run the website with MQTT
+---------------------------------------------------------------
+
+User asked for a .bat file that:
+  1. Checks for errors in every file in the project
+  2. Starts the website on localhost with MQTT working
+
+Project structure (npm workspaces monorepo):
+  - client/        React + Vite + TypeScript (port 5173)
+  - server/        Express + Prisma + MQTT/Aedes (port 4000)
+  - hardware-bridge/  WebSocket bridge for ESP32
+  - functions/     Firebase Cloud Functions
+
+Created dev.bat at project root.
+
+---------------------------------------------------------------
+
+REQUEST 2: Fix - .bat opens and closes after 5 seconds
+---------------------------------------------------------------
+
+Problem: The .bat window was closing too quickly.
+
+Root cause: npm workspaces hoist dependencies to root node_modules,
+so `npx tsc` in subdirectories was routing through the root workspace
+and not finding the right tsconfig.
+
+Fix: Updated dev.bat to use root tsc directly:
+  .\node_modules\.bin\tsc --project client/tsconfig.json --noEmit
+  .\node_modules\.bin\tsc --project server/tsconfig.json --noEmit
+  .\node_modules\.bin\tsc --project hardware-bridge/tsconfig.json --noEmit
+
+Added `pause >nul` at the end so the window always stays open.
+
+---------------------------------------------------------------
+
+REQUEST 3: Scan everything and fix all errors
+---------------------------------------------------------------
+
+Ran TypeScript checks on all 3 packages:
+  - client/         PASS (exit code 0)
+  - server/         PASS (exit code 0)
+  - hardware-bridge/ PASS (exit code 0)
+
+Ran ESLint on functions/ directory - found 4 errors:
+  1. 'onRequest' is assigned but never used     (no-unused-vars)
+  2. 'logger' is assigned but never used        (no-unused-vars)
+  3. Space after '{' in setGlobalOptions call    (object-curly-spacing)
+  4. Space before '}' in setGlobalOptions call  (object-curly-spacing)
+
+Fixed in functions/index.js:
+  - Removed unused imports (onRequest, logger)
+  - Fixed curly brace spacing: { maxInstances: 10 } -> {maxInstances: 10}
+
+All checks now pass.
+
+---------------------------------------------------------------
+
+FINAL dev.bat BEHAVIOR
+---------------------------------------------------------------
+
+1. Runs tsc --noEmit on client, server, hardware-bridge
+2. If any errors found -> shows them, waits for key, exits
+3. If all pass -> starts server in new window (Express + MQTT)
+4. Waits 3 seconds for server init
+5. Starts client in new window (Vite dev server)
+6. Shows URLs and waits for key to close
+
+URLs:
+  Server (API):       http://localhost:4000
+  Client (UI):        http://localhost:5173
+  MQTT TCP Broker:    mqtt://localhost:1883
+  MQTT WebSocket:     ws://localhost:8888
+  Hardware WebSocket: ws://localhost:4000/ws/hardware
+
+============================================

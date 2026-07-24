@@ -1,296 +1,665 @@
-/*
- * Z Care — ESP32 Pillbox Firmware (MQTT edition)
- * ----------------------------------------------
- * Connects to the local MQTT broker (run by the pillbox server) instead of
- * Firebase or the old TCP bridge. The board is an MQTT client over TCP.
+/**
+ * Z Care Smart Pillbox - WiFi + MQTT + Web Dashboard Enabled
  *
- * Topics (DEVICE_ID = "pillbox-01"):
- *   pillbox/pillbox-01/cmd       web  -> board   {type:"dispense"|"schedule", ...}
- *   pillbox/pillbox-01/request   board-> server  {type:"getSchedule"}   (on boot)
- *   pillbox/pillbox-01/dose      board-> web+svr {type:"dose", medicationId}
- *   pillbox/pillbox-01/status    board-> web     {online:true, lastSeen:<epoch s>}
+ * ==========================================================================
+ *  HARDWARE PIN ASSIGNMENTS  (edit here if your wiring differs)
+ * ==========================================================================
+ *    ESP32 DevKit V1
+ *    Servo Motor (carousel/trapdoor) .... GPIO 23
+ *    HC-SR04 Ultrasonic Sensor
+ *       - TRIG .......................... GPIO 18
+ *       - ECHO .......................... GPIO 19  (use divider for 5V echo)
+ *    Buzzer ........................... GPIO 4   (ACTIVE buzzer, 1k resistor)
  *
- * Libraries (Arduino IDE / PlatformIO):
- *   - PubSubClient  (knolleary)  >= 2.8
- *   - Servo (built-in)
- *   - Adafruit GFX + SSD1306
- *   - Adafruit NeoPixel
- *   - NTPClient, ArduinoJson (bundled with PubSubClient)
+ *  NOTE: Buzzer is an ACTIVE type (sounds when pin is HIGH).
+ *        If you switch to a PASSIVE buzzer, replace digitalWrite() calls in
+ *        buzzerPin() with tone()/noTone() and remove the alarm tick logic.
  *
- * Audio reminders over MQTT are out of scope here; the board alerts with
- * buzzer + NeoPixels. Voice playback would use a separate channel.
+ * ==========================================================================
+ *  REQUIRED LIBRARIES  (Arduino IDE / PlatformIO)
+ * ==========================================================================
+ *    WiFi            (ESP32 built-in)
+ *    WebServer       (ESP32 built-in)
+ *    ESP32Servo      (Kevin Harrington's ESP32Servo - replaces 'Servo')
+ *    PubSubClient    (Nick O'Leary MQTT client)
+ *    ArduinoJson     (>= 6.x)
+ *
+ * ==========================================================================
+ *  FLOW
+ * ==========================================================================
+ *    - IDLE: ultrasonic INACTIVE - walking past the box never dispenses.
+ *    - A schedule trigger arrives via MQTT {"action":"pill_time"/"alarm"} or
+ *      {"type":"alarm"}, OR via the local web dashboard "Manual Dispense".
+ *      The pillbox then enters STATE_ARMED:
+ *         1. Buzzer rings (non-blocking alarm tick pattern).
+ *         2. Ultrasonic sensor is ARMED and starts measuring distance.
+ *         3. If a hand is detected (< HAND_DETECT_CM) the servo opens, the
+ *            pill is taken, the servo closes and the alarm silences.
+ *         4. After ALARM_TIMEOUT_MS with no hand, the alarm auto-disarms.
+ * ==========================================================================
  */
 
 #include <WiFi.h>
+#include <WebServer.h>
+#include <ESP32Servo.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include <Servo.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-#include <Adafruit_NeoPixel.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
 
-// ----------------------------- CONFIG -----------------------------------
-#define WIFI_SSID      "WE_3D2278"
-#define WIFI_PASSWORD  "233d2278"
+// ============================================================
+// Wi-Fi Configuration
+// ============================================================
+const char* WIFI_SSID = "WE_3D2278";
+const char* WIFI_PASS = "233d2278";
 
-// MQTT broker address.
-// For HiveMQ public cloud broker (free, no auth needed):
-#define BROKER_HOST    "broker.hivemq.com"
-#define BROKER_PORT    1883
-#define DEVICE_ID      "pillbox-01"
+WebServer httpServer(80);
 
-// For local dev (when running your own broker on LAN), use:
-// #define BROKER_HOST  "192.168.1.5"
-// #define BROKER_PORT  1883
+// ============================================================
+// MQTT Configuration
+// ============================================================
+const char* MQTT_HOST   = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+const char* DEVICE_ID    = "pillbox-01";
 
-#define SERVO_PIN      13
-#define IR_PIN         14
-#define BUZZER_PIN     15
-#define NEO_PIN        2
-#define NUM_PIXELS     8
+WiFiClient    wifiClient;
+PubSubClient  mqttClient(wifiClient);
 
-#define OLED_SDA       21
-#define OLED_SCL       22
-#define OLED_W         128
-#define OLED_H         64
+String mqttTopicCmd;
+String mqttTopicStatus;
+String mqttTopicTelemetry;
+String mqttTopicDose;
 
-#define DISPENSE_TIMEOUT_MS 20000
-#define MAX_MEDS        16
-#define MQTT_KEEPALIVE 30
-#define HEARTBEAT_MS   5000
+// ============================================================
+// Hardware Pin Definitions
+// ============================================================
+#define SERVO_PIN       23
+#define ULTRASONIC_TRIG 18
+#define ULTRASONIC_ECHO 19
+#define BUZZER_PIN      4
 
-// Self-test: when 1, report a drop ~3s after a dispense (no real pill/IR).
-#define SELF_TEST 0
+// ============================================================
+// Tunable Constants
+// ============================================================
+#define HAND_DETECT_CM      10.0          // < this distance (cm) => hand present
+#define DETECT_DISTANCE_CM  HAND_DETECT_CM // alias kept for telemetry compat
+#define SERVO_CLOSED        0
+#define SERVO_OPEN          90
+#define DISPENSE_HOLD_MS    3000           // door stays open while user takes pill
+#define DISPENSE_CLOSE_MS   500            // time for servo return to closed
+#define COOLDOWN_MS         3000           // brief lockout after a dispense
 
-// ----------------------------- State ------------------------------------
-WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+// ---- Alarm / timeout (per Issue 2) ---------------------------
+#define ALARM_TIMEOUT_MS  (5UL * 60UL * 1000UL)  // 5 minutes, configurable
+#define ALARM_TICK_ON_US   300
+#define ALARM_TICK_OFF_US  200
+#define BEEP_CONFIRM_MS    300
 
-Servo carousel;
-Adafruit_NeoPixel pixels(NUM_PIXELS, NEO_PIN, NEO_GRB + NEO_KHZ800);
-Adafruit_SSD1306 display(OLED_W, OLED_H, &Wire, -1);
+#define STATUS_INTERVAL_MS     10000
+#define TELEM_INTERVAL_MS      2000
+#define MQTT_RETRY_MS          5000
+#define WIFI_RETRY_MS          15000
+#define ULTRASONIC_INTERVAL_MS 100
 
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 0, 60000);
-
-struct Med {
-  String id;
-  String name;
-  int slot;
+// ============================================================
+// State Machine
+//   IDLE         -> waiting for next scheduled time, sensor OFF
+//   ARMED        -> alarm ringing + sensor ON, waiting for hand
+//   DISPENSE_*   -> non-blocking servo open/hold/close sequence
+//   COOLDOWN     -> brief post-dispense lockout
+// ============================================================
+enum PillboxState {
+  STATE_IDLE,
+  STATE_ARMED,
+  STATE_DISPENSE_OPEN,
+  STATE_DISPENSE_HOLD,
+  STATE_DISPENSE_CLOSE,
+  STATE_COOLDOWN
 };
-Med schedule[MAX_MEDS];
-int medCount = 0;
 
-String pendingMedId = "";
-unsigned long dispenseStart = 0;
-bool dispensing = false;
-bool alerting = false;
-unsigned long lastBuzz = 0;
-unsigned long lastHeartbeat = 0;
-unsigned long lastReconnect = 0;
+PillboxState currentState = STATE_IDLE;
 
-String cmdTopic = "pillbox/" + String(DEVICE_ID) + "/cmd";
-String doseTopic = "pillbox/" + String(DEVICE_ID) + "/dose";
-String statusTopic = "pillbox/" + String(DEVICE_ID) + "/status";
-String requestTopic = "pillbox/" + String(DEVICE_ID) + "/request";
+// --- non-blocking timing --------------------------------------
+unsigned long alarmStartTime    = 0;
+unsigned long dispensePhaseStart = 0;
+unsigned long cooldownStartTime = 0;
+unsigned long lastSensorRead    = 0;
+unsigned long lastMqttRetry     = 0;
+unsigned long lastWifiRetry     = 0;
+unsigned long lastStatusPub     = 0;
+unsigned long lastTelemetryPub  = 0;
 
-// --------------------------- Helpers ------------------------------------
-void setLEDs(uint8_t r, uint8_t g, uint8_t b) {
-  for (int i = 0; i < NUM_PIXELS; i++) pixels.setPixelColor(i, pixels.Color(r, g, b));
-  pixels.show();
+float currentDistanceCm = 999.0;
+bool  handDetected      = false;
+int   currentServoAngle = SERVO_CLOSED;
+
+Servo pillServo;
+
+// ============================================================
+// Buzzer (ACTIVE) - non-blocking driver
+//   Pattern 0 = off
+//   Pattern 1 = finite single beep (auto-off)
+//   Pattern 2 = repeating alarm tick (runs until buzzerStop)
+// ============================================================
+uint8_t       buzzerPattern    = 0;
+bool          buzzerState      = false;
+unsigned long buzzerBeepStart  = 0;
+unsigned long buzzerBeepDur    = 0;
+unsigned long buzzerLastToggle = 0;
+
+void buzzerPin(bool on) {
+  digitalWrite(BUZZER_PIN, on ? HIGH : LOW);
+  buzzerState = on;
 }
-void buzz(bool on) { digitalWrite(BUZZER_PIN, on ? HIGH : LOW); }
-void showStatus(const char* line1, const char* line2 = "") {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("Z Care Pillbox");
-  display.setTextSize(2);
-  display.setCursor(0, 22);
-  display.println(line1);
-  display.setTextSize(1);
-  display.setCursor(0, 48);
-  display.println(line2);
-  display.display();
-}
-void openSlot(int slot) {
-  int angle = (slot * 180) / max(1, (medCount > 0 ? medCount : 1));
-  carousel.write(angle);
-  delay(600);
-}
-void closeAll() { carousel.write(0); }
 
-// --------------------------- MQTT logic ---------------------------------
+void buzzerStop() {
+  if (buzzerPattern != 0 || buzzerState) {
+    Serial.println(F("[buzzer] OFF"));
+  }
+  buzzerPin(false);
+  buzzerPattern = 0;
+}
+
+void buzzerBeep(uint16_t durationMs) {
+  buzzerPattern   = 1;
+  buzzerBeepStart = millis();
+  buzzerBeepDur   = durationMs;
+  buzzerPin(true);
+  Serial.printf("[buzzer] beep start (%ums)\n", durationMs);
+}
+
+void buzzerAlarmStart() {
+  buzzerPattern    = 2;
+  buzzerLastToggle = millis();
+  buzzerPin(true);
+  Serial.println(F("[buzzer] alarm START"));
+}
+
+void buzzerUpdate() {
+  unsigned long now = millis();
+  if (buzzerPattern == 0) return;
+
+  if (buzzerPattern == 1) {
+    if (now - buzzerBeepStart >= buzzerBeepDur) {
+      buzzerPin(false);
+      buzzerPattern = 0;
+      Serial.println(F("[buzzer] beep finished"));
+    }
+    return;
+  }
+
+  if (buzzerPattern == 2) {
+    unsigned long onMs  = (ALARM_TICK_ON_US  + 999) / 1000; if (onMs  == 0) onMs  = 1;
+    unsigned long offMs = (ALARM_TICK_OFF_US + 999) / 1000; if (offMs == 0) offMs = 1;
+    unsigned long since = now - buzzerLastToggle;
+    if (buzzerState && since >= onMs) {
+      buzzerPin(false);
+      buzzerLastToggle = now;
+    } else if (!buzzerState && since >= offMs) {
+      buzzerPin(true);
+      buzzerLastToggle = now;
+    }
+  }
+}
+
+// ============================================================
+// MQTT topics
+// ============================================================
+void buildMqttTopics() {
+  String base = String("pillbox/") + DEVICE_ID;
+  mqttTopicCmd       = base + "/cmd";
+  mqttTopicStatus    = base + "/status";
+  mqttTopicTelemetry = base + "/telemetry";
+  mqttTopicDose      = base + "/dose";
+}
+
+// ============================================================
+// Ultrasonic read  (non-blocking thanks to short pulseIn timeout)
+// ============================================================
+float getDistanceCm() {
+  digitalWrite(ULTRASONIC_TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(ULTRASONIC_TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(ULTRASONIC_TRIG, LOW);
+
+  long duration = pulseIn(ULTRASONIC_ECHO, HIGH, 25000); // 25ms timeout
+  if (duration == 0) {
+    Serial.println(F("[ultrasonic] no echo (timeout)"));
+    return 999.0;
+  }
+  return (duration * 0.034) / 2.0;
+}
+
+// Only called while STATE_ARMED - sensor is OFF when idle.
+void ultrasonicArmedUpdate() {
+  if (currentState != STATE_ARMED) return;
+  if (millis() - lastSensorRead < ULTRASONIC_INTERVAL_MS) return;
+  lastSensorRead = millis();
+
+  currentDistanceCm = getDistanceCm();
+  bool prev = handDetected;
+  handDetected = (currentDistanceCm > 0 && currentDistanceCm < HAND_DETECT_CM);
+
+  if (handDetected && !prev) {
+    Serial.printf("[ultrasonic] HAND at %.1f cm (< %u cm) -> dispense\n",
+                  currentDistanceCm, (unsigned)HAND_DETECT_CM);
+    startDispense();
+  } else if (!prev) {
+    Serial.printf("[ultrasonic] reading %.1f cm (no hand)\n", currentDistanceCm);
+  }
+}
+
+// ============================================================
+// Arm / Disarm the alarm + sensor
+// ============================================================
+void armAlarm() {
+  currentState    = STATE_ARMED;
+  alarmStartTime  = millis();
+  handDetected    = false;
+  currentDistanceCm = 999.0;
+  buzzerAlarmStart();
+  Serial.println(F("[system] ALARM ARMED - ultrasonic ACTIVE"));
+  Serial.printf("[system] timeout in %u ms\n", (unsigned)ALARM_TIMEOUT_MS);
+}
+
+void disarmAlarm() {
+  buzzerStop();
+  currentState     = STATE_IDLE;
+  handDetected     = false;
+  currentDistanceCm = 999.0;
+  Serial.println(F("[system] alarm DISARMED - ultrasonic INACTIVE"));
+}
+
+// ============================================================
+// Non-blocking dispense state machine
+// ============================================================
+void publishDose();
+
+void startDispense() {
+  Serial.println(F("[dispense] START - hand detected, opening door"));
+  buzzerStop();
+  pillServo.write(SERVO_OPEN);
+  currentServoAngle  = SERVO_OPEN;
+  currentState       = STATE_DISPENSE_HOLD;
+  dispensePhaseStart = millis();
+}
+
+void dispenseUpdate() {
+  unsigned long now = millis();
+
+  if (currentState == STATE_DISPENSE_HOLD) {
+    if (now - dispensePhaseStart >= DISPENSE_HOLD_MS) {
+      Serial.println(F("[dispense] hold complete, closing door"));
+      pillServo.write(SERVO_CLOSED);
+      currentServoAngle  = SERVO_CLOSED;
+      currentState       = STATE_DISPENSE_CLOSE;
+      dispensePhaseStart = now;
+    }
+    return;
+  }
+
+  if (currentState == STATE_DISPENSE_CLOSE) {
+    if (now - dispensePhaseStart >= DISPENSE_CLOSE_MS) {
+      buzzerBeep(BEEP_CONFIRM_MS);
+      publishDose();
+      currentState       = STATE_COOLDOWN;
+      cooldownStartTime = now;
+      Serial.println(F("[dispense] COMPLETE - dose published"));
+    }
+    return;
+  }
+}
+
+// ============================================================
+// MQTT publishers
+// ============================================================
 void publishStatus() {
+  StaticJsonDocument<256> doc;
+  doc["type"]     = "status";
+  doc["online"]   = true;
+  doc["uptime"]   = millis() / 1000;
+  doc["freeHeap"] = ESP.getFreeHeap();
+  doc["wifiRssi"] = WiFi.RSSI();
+  doc["ip"]       = WiFi.localIP().toString();
+  char buf[256];
+  serializeJson(doc, buf);
+  mqttClient.publish(mqttTopicStatus.c_str(), buf, true);
+}
+
+void publishTelemetry() {
+  StaticJsonDocument<320> doc;
+  doc["type"]             = "telemetry";
+  doc["timestamp"]        = millis();
+  doc["state"]            = (int)currentState;
+  doc["pillTimeActive"]   = (currentState == STATE_ARMED);
+  doc["ultrasonic"]["distance"]    = round(currentDistanceCm * 10.0) / 10.0;
+  doc["ultrasonic"]["handDetected"] = handDetected;
+  doc["motors"]["servo"]["angle"]   = currentServoAngle;
+  doc["buzzer"]["active"]           = buzzerState;
+  char buf[320];
+  serializeJson(doc, buf);
+  mqttClient.publish(mqttTopicTelemetry.c_str(), buf, false);
+}
+
+void publishDose() {
   StaticJsonDocument<128> doc;
-  doc["online"] = true;
-  doc["lastSeen"] = (int)timeClient.getEpochTime();
+  doc["type"]         = "dose";
+  doc["medicationId"] = "hand-triggered";
+  doc["quantity"]     = 1;
   char buf[128];
   serializeJson(doc, buf);
-  mqttClient.publish(statusTopic.c_str(), buf, true);  // retained
+  mqttClient.publish(mqttTopicDose.c_str(), buf, true);
+  Serial.println(F("[mqtt] dose published"));
 }
 
-void publishDose(const String& medId) {
-  StaticJsonDocument<128> doc;
-  doc["type"] = "dose";
-  doc["medicationId"] = medId;
-  char buf[128];
-  serializeJson(doc, buf);
-  mqttClient.publish(doseTopic.c_str(), buf, false);
-  Serial.println("dose published");
-}
+// ============================================================
+// MQTT message handler
+// ============================================================
+void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+  char msg[256];
+  unsigned int copyLen = min(length, (unsigned int)sizeof(msg) - 1);
+  memcpy(msg, payload, copyLen);
+  msg[copyLen] = '\0';
 
-void applySchedule(JsonDocument& doc) {
-  medCount = 0;
-  JsonArray meds = doc["meds"];
-  if (meds.isNull()) return;
-  for (JsonVariant v : meds) {
-    if (medCount >= MAX_MEDS) break;
-    schedule[medCount].id = v["medicationId"] | "";
-    schedule[medCount].name = v["name"] | "";
-    schedule[medCount].slot = v["slot"] | medCount;
-    medCount++;
+  Serial.printf("[MQTT] Received: %s\n", msg);
+
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, msg);
+  if (err) {
+    Serial.printf("[mqtt] JSON parse FAILED: %s\n", err.c_str());
+    return;
   }
-  showStatus("Synced", (String(medCount) + " meds").c_str());
-  Serial.printf("schedule loaded: %d meds\n", medCount);
-}
 
-void beginDispense(const String& medId, int slot) {
-  pendingMedId = medId;
-  dispensing = true;
-  alerting = true;
-  dispenseStart = millis();
-  showStatus("Take med", medId.substring(0, 8).c_str());
-  setLEDs(0, 255, 180);
-  openSlot(slot);
-}
+  const char* type   = doc["type"]   | "";
+  const char* action = doc["action"] | "";
 
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  if (String(topic) != cmdTopic) return;
+  // --------------------------------------------------------
+  // Alarm / scheduled pill time -> ARM the box
+  // --------------------------------------------------------
+  if (strcmp(action, "pill_time") == 0 ||
+      strcmp(action, "alarm")     == 0 ||
+      strcmp(type,   "alarm")     == 0) {
+    if (currentState == STATE_IDLE) {
+      armAlarm();
+    } else {
+      Serial.printf("[system] alarm ignored - busy in state %d\n", currentState);
+    }
+  }
 
-  StaticJsonDocument<512> doc;
-  DeserializationError err = deserializeJson(doc, payload, length);
-  if (err) { Serial.println("json parse error"); return; }
+  // --------------------------------------------------------
+  // Dispense (manual or server schedule)
+  // --------------------------------------------------------
+  else if (strcmp(action, "dispense") == 0 || strcmp(type, "dispense") == 0) {
+    if (currentState == STATE_IDLE || currentState == STATE_ARMED) {
+      if (currentState == STATE_ARMED) {
+        Serial.println(F("[system] dispense while armed -> triggering"));
+      } else {
+        Serial.println(F("[system] manual dispense (no alarm)"));
+      }
+      startDispense();
+    } else {
+      Serial.printf("[system] dispense ignored - busy in state %d\n", currentState);
+    }
+  }
 
-  const char* type = doc["type"] | "";
-  if (strcmp(type, "dispense") == 0) {
-    String mid = doc["medicationId"] | "";
-    int slot = 0;
-    for (int s = 0; s < medCount; s++) if (schedule[s].id == mid) slot = schedule[s].slot;
-    beginDispense(mid, slot);
-  } else if (strcmp(type, "schedule") == 0) {
-    applySchedule(doc);
+  // --------------------------------------------------------
+  // Direct buzzer command
+  // --------------------------------------------------------
+  else if (strcmp(action, "buzzer") == 0) {
+    const char* pattern = doc["pattern"] | "off";
+    int duration = doc["duration"] | 1000;
+    if (strcmp(pattern, "beep") == 0) {
+      buzzerBeep((uint16_t)duration);
+    } else if (strcmp(pattern, "alarm") == 0) {
+      buzzerAlarmStart();   // does NOT arm sensor; use "pill_time" to arm
+    } else {
+      buzzerStop();
+    }
+  }
+
+  // --------------------------------------------------------
+  // Direct servo
+  // --------------------------------------------------------
+  else if (strcmp(action, "servo") == 0) {
+    int pos = doc["position"] | SERVO_CLOSED;
+    pos = constrain(pos, 0, 180);
+    pillServo.write(pos);
+    currentServoAngle = pos;
+    Serial.printf("[Servo] MQTT set to %d\n", pos);
+  } else if (strcmp(action, "open") == 0) {
+    pillServo.write(SERVO_OPEN);
+    currentServoAngle = SERVO_OPEN;
+    Serial.println(F("[Servo] OPEN"));
+  } else if (strcmp(action, "close") == 0) {
+    pillServo.write(SERVO_CLOSED);
+    currentServoAngle = SERVO_CLOSED;
+    Serial.println(F("[Servo] CLOSE"));
   }
 }
 
-void ensureMqtt() {
+// ============================================================
+// MQTT connection
+// ============================================================
+void connectMqtt() {
   if (mqttClient.connected()) return;
-  if (millis() - lastReconnect < 2000) return;
-  lastReconnect = millis();
+  if (WiFi.status() != WL_CONNECTED) return;
 
-  String clientId = "pillbox-esp32-" + String(DEVICE_ID);
-  if (mqttClient.connect(clientId.c_str(), NULL, NULL, statusTopic.c_str(), 1, true, "{\"online\":false}")) {
-    mqttClient.subscribe(cmdTopic.c_str());
-    // Ask the server for the current schedule.
-    mqttClient.publish(requestTopic.c_str(), "{\"type\":\"getSchedule\"}", false);
+  String clientId = String("esp32-") + DEVICE_ID + "-" + String(random(10000));
+  Serial.printf("[MQTT] Connecting to %s:%u ...", MQTT_HOST, MQTT_PORT);
+
+  if (mqttClient.connect(clientId.c_str())) {
+    Serial.println(" connected");
+    mqttClient.subscribe(mqttTopicCmd.c_str(), 1);
+    mqttClient.setCallback(onMqttMessage);
+    Serial.printf("[MQTT] Subscribed to %s\n", mqttTopicCmd.c_str());
     publishStatus();
-    showStatus("Linked", "mqtt ok");
-    Serial.println("MQTT connected");
   } else {
-    Serial.print("MQTT connect failed, rc=");
-    Serial.println(mqttClient.state());
+    Serial.printf(" failed (rc=%d)\n", mqttClient.state());
   }
 }
 
-// ----------------------------- Setup ------------------------------------
-void setup() {
-  Serial.begin(115200);
-  pinMode(IR_PIN, INPUT_PULLUP);
-  pinMode(BUZZER_PIN, OUTPUT);
-  buzz(false);
-  pixels.begin();
-  setLEDs(10, 10, 10);
+// ============================================================
+// Web dashboard routes
+// ============================================================
+void handleRoot() {
+  String stateStr;
+  switch (currentState) {
+    case STATE_IDLE:           stateStr = "IDLE (Ready, sensor OFF)"; break;
+    case STATE_ARMED:          stateStr = "ARMED (alarm ringing, sensor ON)"; break;
+    case STATE_DISPENSE_OPEN:  stateStr = "DISPENSING (opening)"; break;
+    case STATE_DISPENSE_HOLD:  stateStr = "DISPENSING (door open)"; break;
+    case STATE_DISPENSE_CLOSE: stateStr = "DISPENSING (closing)"; break;
+    case STATE_COOLDOWN:        stateStr = "COOLDOWN"; break;
+    default:                    stateStr = "UNKNOWN"; break;
+  }
 
-  carousel.attach(SERVO_PIN);
-  closeAll();
+  String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<style>body{font-family:sans-serif;text-align:center;padding:20px;background:#121212;color:#fff;}";
+  html += ".btn{background:#00e676;color:#000;padding:15px 25px;border:none;border-radius:8px;font-size:18px;font-weight:bold;cursor:pointer;margin:6px;}";
+  html += ".warn{background:#ff5252;color:#fff;}";
+  html += ".card{background:#1e1e1e;padding:20px;border-radius:12px;max-width:440px;margin:auto;box-shadow:0 4px 10px rgba(0,0,0,0.5);}</style></head><body>";
+  html += "<div class='card'>";
+  html += "<h2>💊 Z Care Pillbox</h2>";
+  html += "<p><strong>MQTT:</strong> " + String(mqttClient.connected() ? "Connected" : "Disconnected") + "</p>";
+  html += "<p><strong>State:</strong> " + stateStr + "</p>";
+  if (currentState == STATE_ARMED) {
+    unsigned long remaining = (ALARM_TIMEOUT_MS - (millis() - alarmStartTime)) / 1000;
+    html += "<p><strong>Alarm timeout in:</strong> " + String((long)remaining) + " s</p>";
+    html += "<p><strong>Sensor:</strong> " + String(currentDistanceCm, 1) + " cm</p>";
+  } else {
+    html += "<p><strong>Sensor:</strong> inactive (idle)</p>";
+  }
+  if (currentState == STATE_IDLE) {
+    html += "<form action='/arm' method='POST'><button class='btn'>Arm Alarm (test)</button></form>";
+    html += "<form action='/dispense' method='POST'><button class='btn'>Manual Dispense</button></form>";
+  } else if (currentState == STATE_ARMED) {
+    html += "<form action='/dispense' method='POST'><button class='btn'>Dispense Now</button></form>";
+    html += "<form action='/disarm' method='POST'><button class='btn warn'>Disarm Alarm</button></form>";
+  } else {
+    html += "<p style='color:#ff5252;'>Busy - please wait</p>";
+  }
+  html += "</div></body></html>";
 
-  Wire.begin(OLED_SDA, OLED_SCL);
-  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  showStatus("Booting", "connect wifi");
+  httpServer.send(200, "text/html", html);
+}
 
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  while (WiFi.status() != WL_CONNECTED) {
+void handleArm() {
+  if (currentState == STATE_IDLE) {
+    armAlarm();
+    httpServer.send(200, "text/plain", "Alarm ARMED.");
+  } else {
+    httpServer.send(400, "text/plain", "Not idle.");
+  }
+}
+
+void handleDisarm() {
+  if (currentState == STATE_ARMED) {
+    disarmAlarm();
+    httpServer.send(200, "text/plain", "Alarm DISARMED.");
+  } else {
+    httpServer.send(400, "text/plain", "Not armed.");
+  }
+}
+
+void handleManualDispense() {
+  if (currentState == STATE_IDLE || currentState == STATE_ARMED) {
+    httpServer.send(200, "text/plain", "Dispensing started!");
+    startDispense();
+  } else {
+    httpServer.send(400, "text/plain", "Pillbox is currently busy.");
+  }
+}
+
+// ============================================================
+// Wi-Fi connection
+// ============================================================
+void setupWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.printf("[WiFi] Connecting to %s", WIFI_SSID);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi connected");
-  timeClient.begin();
-  timeClient.update();
 
-  mqttClient.setServer(BROKER_HOST, BROKER_PORT);
-  mqttClient.setCallback(mqttCallback);
-  mqttClient.setBufferSize(1024);
-  mqttClient.setKeepAlive(MQTT_KEEPALIVE);
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("\n[WiFi] Connected! IP Address: %s\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println(F("\n[WiFi] Connection timed out - will retry"));
+  }
 
-  showStatus("Online", WiFi.localIP().toString().c_str());
+  httpServer.on("/",          HTTP_GET,  handleRoot);
+  httpServer.on("/arm",       HTTP_POST, handleArm);
+  httpServer.on("/disarm",    HTTP_POST, handleDisarm);
+  httpServer.on("/dispense",  HTTP_POST, handleManualDispense);
+  httpServer.begin();
+  Serial.println(F("[Web] HTTP Server started."));
 }
 
-// ------------------------------ Loop ------------------------------------
+// ============================================================
+// Setup
+// ============================================================
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.println(F("\n=== Z Care WiFi + MQTT Smart Pillbox ==="));
+  Serial.printf("Pins: servo=%d trig=%d echo=%d buzzer=%d (ACTIVE)\n",
+                SERVO_PIN, ULTRASONIC_TRIG, ULTRASONIC_ECHO, BUZZER_PIN);
+  Serial.printf("Hand threshold: %u cm | Alarm timeout: %u ms | Hold: %u ms\n",
+                (unsigned)HAND_DETECT_CM, (unsigned)ALARM_TIMEOUT_MS,
+                (unsigned)DISPENSE_HOLD_MS);
+
+  pinMode(ULTRASONIC_TRIG, OUTPUT);
+  pinMode(ULTRASONIC_ECHO, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  buzzerPin(false);  // ensure buzzer OFF at boot
+
+  pillServo.attach(SERVO_PIN);
+  pillServo.write(SERVO_CLOSED);
+
+  buildMqttTopics();
+
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setCallback(onMqttMessage);
+  mqttClient.setBufferSize(512);
+
+  setupWiFi();
+  connectMqtt();
+
+  // Startup confirmation beep so we can tell the audio driver works
+  Serial.println(F("[buzzer] startup test beep"));
+  buzzerBeep(150);
+
+  Serial.println(F("[System] Ready - IDLE, ultrasonic INACTIVE"));
+}
+
+// ============================================================
+// Main loop (non-blocking)
+// ============================================================
 void loop() {
-  timeClient.update();
-  ensureMqtt();
+  unsigned long now = millis();
+
+  httpServer.handleClient();
+
+  // WiFi reconnect (throttled)
+  if (WiFi.status() != WL_CONNECTED) {
+    if (now - lastWifiRetry > WIFI_RETRY_MS) {
+      lastWifiRetry = now;
+      WiFi.reconnect();
+    }
+  }
+
+  // MQTT reconnect (throttled)
+  if (WiFi.status() == WL_CONNECTED && !mqttClient.connected()) {
+    if (now - lastMqttRetry > MQTT_RETRY_MS) {
+      lastMqttRetry = now;
+      connectMqtt();
+    }
+  }
   mqttClient.loop();
 
-  unsigned long now = millis();
-  if (now - lastHeartbeat > HEARTBEAT_MS) {
-    lastHeartbeat = now;
-    if (mqttClient.connected()) publishStatus();
+  // Buzzer driver (always runs so beeps end on time)
+  buzzerUpdate();
+
+  // State machine
+  switch (currentState) {
+
+    case STATE_IDLE:
+      // Ultrasonic INACTIVE - no reads, no dispensing.
+      break;
+
+    case STATE_ARMED:
+      ultrasonicArmedUpdate();
+      if (now - alarmStartTime >= ALARM_TIMEOUT_MS) {
+        Serial.printf("[system] ALARM TIMEOUT after %u ms - disarming\n",
+                      (unsigned)ALARM_TIMEOUT_MS);
+        disarmAlarm();
+      }
+      break;
+
+    case STATE_DISPENSE_HOLD:
+    case STATE_DISPENSE_CLOSE:
+      dispenseUpdate();
+      break;
+
+    case STATE_COOLDOWN:
+      if (now - cooldownStartTime >= COOLDOWN_MS) {
+        currentState = STATE_IDLE;
+        Serial.println(F("[System] cooldown done -> IDLE"));
+      }
+      break;
   }
 
-  if (dispensing) {
-    if (alerting && millis() - lastBuzz > 400) {
-      buzz(true); setLEDs(255, 120, 0);
-      lastBuzz = millis();
+  // Periodic status / telemetry
+  if (mqttClient.connected()) {
+    if (now - lastStatusPub >= STATUS_INTERVAL_MS) {
+      lastStatusPub = now;
+      publishStatus();
     }
-    if (alerting && millis() - lastBuzz > 200) {
-      buzz(false); setLEDs(0, 255, 180);
-    }
-
-#if SELF_TEST
-    if (millis() - dispenseStart > 3000) {
-      publishDose(pendingMedId);
-      showStatus("Dispensed", pendingMedId.substring(0, 8).c_str());
-      alerting = false; buzz(false);
-      setLEDs(0, 200, 80);
-      delay(1500);
-      closeAll();
-      dispensing = false;
-      return;
-    }
-#endif
-
-    bool dropped = (digitalRead(IR_PIN) == LOW);
-    if (dropped) {
-      publishDose(pendingMedId);
-      showStatus("Dispensed", pendingMedId.substring(0, 8).c_str());
-      alerting = false; buzz(false);
-      setLEDs(0, 200, 80);
-      delay(1500);
-      closeAll();
-      dispensing = false;
-    } else if (millis() - dispenseStart > DISPENSE_TIMEOUT_MS) {
-      showStatus("Missed", pendingMedId.substring(0, 8).c_str());
-      alerting = false; buzz(false);
-      setLEDs(200, 0, 0);
-      delay(1500);
-      closeAll();
-      dispensing = false;
+    if (now - lastTelemetryPub >= TELEM_INTERVAL_MS) {
+      lastTelemetryPub = now;
+      publishTelemetry();
     }
   }
-
-  delay(10);
 }

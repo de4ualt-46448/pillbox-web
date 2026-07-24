@@ -7,31 +7,73 @@ import mqtt, { type MqttClient } from "mqtt";
  * The web app talks to the ESP32 through the local MQTT broker running in the
  * server (TCP 1883 for the board, WS 8888 for the browser):
  *
- *   pillbox/{deviceId}/cmd      web  -> board   {type:"dispense"|"schedule"}
- *   pillbox/{deviceId}/request  web  -> server  {type:"getSchedule"}
- *   pillbox/{deviceId}/dose     board-> web+server {type:"dose", medicationId}
- *   pillbox/{deviceId}/status   board-> web     {online, lastSeen}
+ *   pillbox/{deviceId}/cmd        web  -> board   {action:"dispense"|"schedule"|"servo"|"buzzer"}
+ *   pillbox/{deviceId}/request    web  -> server  {type:"getSchedule"}
+ *   pillbox/{deviceId}/dose       board-> web+server {type:"dose", medicationId}
+ *   pillbox/{deviceId}/status     board-> web     {type:"status", online, lastSeen, ...}
+ *   pillbox/{deviceId}/telemetry  board-> web     {type:"telemetry", ultrasonic, motors, buzzer}
  *
  * Exposes the same `hardwareClient` interface the UI already uses
- * (connect / fireReminder / refreshSchedule / onDose / onStatus / sim).
+ * (connect / fireReminder / refreshSchedule / onDose / onStatus / onTelemetry / sim).
  */
 
 const DEFAULT_DEVICE_ID = "pillbox-01";
 
+const isLocalhost = typeof window !== "undefined" && (
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1" ||
+  window.location.hostname.startsWith("192.168.") ||
+  window.location.hostname.startsWith("10.")
+);
+
+const defaultWsUrl = isLocalhost ? "ws://localhost:8888" : "ws://broker.hivemq.com:8000/mqtt";
+
 // MQTT broker WebSocket endpoint.
-// HiveMQ public broker: ws://broker.hivemq.com:8083/mqtt
+// HiveMQ public broker: ws://broker.hivemq.com:8000/mqtt
 // Local dev (when server runs its own aedes): ws://localhost:8888
 // Override via VITE_MQTT_WS_URL env var.
 const MQTT_WS_URL =
-  (import.meta as any).env?.VITE_MQTT_WS_URL || "ws://broker.hivemq.com:8083/mqtt";
+  (import.meta as any).env?.VITE_MQTT_WS_URL || defaultWsUrl;
 
 type DoseHandler = (medicationId: string) => void;
 type StatusHandler = (online: boolean) => void;
+type TelemetryHandler = (data: TelemetryData) => void;
 
 export interface Esp32Med {
   medicationId: string;
   name: string;
   slot: number;
+}
+
+export interface TelemetryData {
+  timestamp: number;
+  ultrasonic: {
+    distance: number;
+    handDetected: boolean;
+  };
+  motors: {
+    stepper: {
+      moving: boolean;
+      position: number;
+    };
+    servo: {
+      angle: number;
+    };
+  };
+  buzzer: {
+    active: boolean;
+  };
+  medSlotCount: number;
+}
+
+export interface DeviceStatus {
+  type: "status";
+  online: boolean;
+  lastSeen: number;
+  uptime: number;
+  freeHeap: number;
+  wifiRssi: number;
+  ip: string;
 }
 
 class MqttHardwareClient {
@@ -40,6 +82,9 @@ class MqttHardwareClient {
   private sim = false;
   private doseHandlers = new Set<DoseHandler>();
   private statusHandlers = new Set<StatusHandler>();
+  private telemetryHandlers = new Set<TelemetryHandler>();
+  private latestTelemetry: TelemetryData | null = null;
+  private latestStatus: DeviceStatus | null = null;
 
   setDeviceId(id: string): void {
     this.deviceId = id;
@@ -61,18 +106,62 @@ class MqttHardwareClient {
     this.client.on("close", () => this.emitStatus(false));
     this.client.on("error", () => {});
     this.client.on("message", (topic, payload) => {
+      const rawPayload = payload.toString().trim();
       let msg: any;
       try {
-        msg = JSON.parse(payload.toString());
+        msg = JSON.parse(rawPayload);
       } catch {
-        return;
+        if (topic.endsWith("/status") && (rawPayload === "online" || rawPayload === "offline")) {
+          msg = { online: rawPayload === "online" };
+        } else {
+          return;
+        }
       }
+
+      // ---- DOSE EVENT ----
       if (topic.endsWith("/dose") && msg.medicationId) {
         this.doseHandlers.forEach((h) => h(String(msg.medicationId)));
-      } else if (topic.endsWith("/status")) {
-        const lastSeen = msg.lastSeen ? Number(msg.lastSeen) : 0;
+      }
+
+      // ---- STATUS UPDATE ----
+      else if (topic.endsWith("/status")) {
+        const lastSeen = msg.lastSeen ? Number(msg.lastSeen) : Math.floor(Date.now() / 1000);
         const online = !!msg.online && Date.now() / 1000 - lastSeen < 30;
+        this.latestStatus = {
+          type: "status",
+          online,
+          lastSeen,
+          uptime: msg.uptime ?? 0,
+          freeHeap: msg.freeHeap ?? 0,
+          wifiRssi: msg.wifiRssi ?? 0,
+          ip: msg.ip ?? "",
+        };
         this.statusHandlers.forEach((h) => h(online));
+      }
+
+      // ---- TELEMETRY DATA ----
+      else if (topic.endsWith("/telemetry")) {
+        this.latestTelemetry = {
+          timestamp: msg.timestamp ?? Date.now(),
+          ultrasonic: {
+            distance: msg.ultrasonic?.distance ?? 0,
+            handDetected: msg.ultrasonic?.handDetected ?? false,
+          },
+          motors: {
+            stepper: {
+              moving: msg.motors?.stepper?.moving ?? false,
+              position: msg.motors?.stepper?.position ?? 0,
+            },
+            servo: {
+              angle: msg.motors?.servo?.angle ?? 0,
+            },
+          },
+          buzzer: {
+            active: msg.buzzer?.active ?? false,
+          },
+          medSlotCount: msg.medSlotCount ?? 0,
+        };
+        this.telemetryHandlers.forEach((h) => h(this.latestTelemetry!));
       }
     });
   }
@@ -80,6 +169,7 @@ class MqttHardwareClient {
   private resubscribe(): void {
     this.client?.subscribe(`pillbox/${this.deviceId}/dose`);
     this.client?.subscribe(`pillbox/${this.deviceId}/status`);
+    this.client?.subscribe(`pillbox/${this.deviceId}/telemetry`);
   }
 
   disconnect(): void {
@@ -101,7 +191,41 @@ class MqttHardwareClient {
     }
     this.client!.publish(
       `pillbox/${this.deviceId}/cmd`,
-      JSON.stringify({ type: "dispense", medicationId, text }),
+      JSON.stringify({ action: "dispense", medicationId, text }),
+      { qos: 1 },
+    );
+  }
+
+  /** Send a dispense command with specific motor steps and slot. */
+  dispense(medicationId: string, slot: number, steps: number, quantity: number = 1): void {
+    if (this.sim) {
+      setTimeout(() => this.simulateDose(medicationId, quantity), 1500);
+      return;
+    }
+    if (!this.isConnected()) return;
+    this.client!.publish(
+      `pillbox/${this.deviceId}/cmd`,
+      JSON.stringify({ action: "dispense", medicationId, slot, steps, quantity }),
+      { qos: 1 },
+    );
+  }
+
+  /** Control the servo motor (trapdoor). */
+  servo(position: number): void {
+    if (!this.isConnected()) return;
+    this.client!.publish(
+      `pillbox/${this.deviceId}/cmd`,
+      JSON.stringify({ action: "servo", position }),
+      { qos: 1 },
+    );
+  }
+
+  /** Trigger the buzzer with a pattern. */
+  buzzer(pattern: "beep" | "alarm" | "off", duration: number = 1000): void {
+    if (!this.isConnected()) return;
+    this.client!.publish(
+      `pillbox/${this.deviceId}/cmd`,
+      JSON.stringify({ action: "buzzer", pattern, duration }),
       { qos: 1 },
     );
   }
@@ -120,9 +244,19 @@ class MqttHardwareClient {
   pushSchedule(meds: Esp32Med[]): void {
     this.client?.publish(
       `pillbox/${this.deviceId}/cmd`,
-      JSON.stringify({ type: "schedule", meds }),
+      JSON.stringify({ action: "schedule", meds }),
       { qos: 1, retain: true },
     );
+  }
+
+  /** Get the latest telemetry data. */
+  getLatestTelemetry(): TelemetryData | null {
+    return this.latestTelemetry;
+  }
+
+  /** Get the latest device status. */
+  getLatestStatus(): DeviceStatus | null {
+    return this.latestStatus;
   }
 
   // ---- software simulation (no physical board) ----
@@ -161,6 +295,11 @@ class MqttHardwareClient {
   onStatus(handler: StatusHandler): () => void {
     this.statusHandlers.add(handler);
     return () => this.statusHandlers.delete(handler);
+  }
+
+  onTelemetry(handler: TelemetryHandler): () => void {
+    this.telemetryHandlers.add(handler);
+    return () => this.telemetryHandlers.delete(handler);
   }
 
   private emitStatus(online: boolean): void {

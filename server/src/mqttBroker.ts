@@ -3,6 +3,9 @@ import { prisma } from "./prisma.js";
 import { sendPushToUser } from "./routes/push.js";
 import { MQTT_BROKER_URL } from "./config.js";
 
+// Module-scoped reconnection attempts counter for exponential backoff
+let reconnectAttempts = 0;
+
 /**
  * MQTT client for the Z Care pillbox.
  *
@@ -11,14 +14,62 @@ import { MQTT_BROKER_URL } from "./config.js";
  *   2. Local aedes broker — when MQTT_BROKER_URL is not set (legacy/local dev)
  *
  * Topic model (per device, default "pillbox-01"):
- *   pillbox/{deviceId}/cmd      web  -> board   {type:"dispense"|"schedule", ...}
- *   pillbox/{deviceId}/request  board-> server  {type:"getSchedule"}
- *   pillbox/{deviceId}/dose     board-> web+svr {type:"dose", medicationId}
- *   pillbox/{deviceId}/status   board-> web     {online, lastSeen}
+ *   pillbox/{deviceId}/cmd        web  -> board   {action:"dispense"|"schedule"|"servo"|"buzzer"}
+ *   pillbox/{deviceId}/request    board-> server  {type:"getSchedule"}
+ *   pillbox/{deviceId}/dose       board-> web+svr {type:"dose", medicationId}
+ *   pillbox/{deviceId}/status     board-> web     {type:"status", online, lastSeen, uptime, ...}
+ *   pillbox/{deviceId}/telemetry  board-> web     {type:"telemetry", ultrasonic, motors, buzzer}
  *
  * The server acts as an MQTT client so it can record doses (stock
  * decrement + push) and answer schedule requests from the database.
  */
+
+// Track device telemetry for real-time updates
+interface DeviceTelemetry {
+  deviceId: string;
+  online: boolean;
+  lastSeen: number;
+  uptime: number;
+  freeHeap: number;
+  wifiRssi: number;
+  ip: string;
+  ultrasonic: {
+    distance: number;
+    handDetected: boolean;
+  };
+  motors: {
+    stepper: {
+      moving: boolean;
+      position: number;
+    };
+    servo: {
+      angle: number;
+    };
+  };
+  buzzer: {
+    active: boolean;
+  };
+  medSlotCount: number;
+}
+
+const deviceTelemetry = new Map<string, DeviceTelemetry>();
+
+// Export for external access (e.g., REST API)
+export function getDeviceTelemetry(deviceId: string): DeviceTelemetry | undefined {
+  return deviceTelemetry.get(deviceId);
+}
+
+export function getAllDeviceTelemetry(): DeviceTelemetry[] {
+  return Array.from(deviceTelemetry.values());
+}
+
+// Publish a command to a device's cmd topic (used by REST API)
+let mqttClient: ReturnType<typeof mqtt.connect> | null = null;
+
+export function publishDeviceCommand(deviceId: string, message: Record<string, unknown>): void {
+  if (!mqttClient?.connected) throw new Error("MQTT client not connected");
+  mqttClient.publish(`pillbox/${deviceId}/cmd`, JSON.stringify(message), { qos: 1 });
+}
 
 export function startMqttBroker(): void {
   const brokerUrl = MQTT_BROKER_URL || "mqtt://127.0.0.1:1883";
@@ -32,20 +83,45 @@ export function startMqttBroker(): void {
   }
 
   // --- Server-side client (dose recording + schedule answers) ---
-  const client = mqtt.connect(brokerUrl);
+
+  mqttClient = mqtt.connect(brokerUrl);
+  const client = mqttClient;
 
   client.on("connect", () => {
+    reconnectAttempts = 0; // reset on successful connection
     client.subscribe("pillbox/+/dose");
     client.subscribe("pillbox/+/request");
+    client.subscribe("pillbox/+/status");
+    client.subscribe("pillbox/+/telemetry");
     console.log(`[mqtt] server subscriber connected to ${brokerUrl}`);
   });
 
+  client.on("reconnect", () => {
+    reconnectAttempts++;
+    console.log(`[mqtt] reconnect attempt #${reconnectAttempts}`);
+  });
+
   client.on("message", async (topic, payload) => {
+    const rawPayload = payload.toString().trim();
     try {
       const parts = topic.split("/");
       const deviceId = parts[1];
-      const msg = JSON.parse(payload.toString());
+      
+      let msg: any = null;
+      try {
+        msg = JSON.parse(rawPayload);
+      } catch {
+        if (topic.endsWith("/status") && (rawPayload === "online" || rawPayload === "offline")) {
+          msg = { type: "status", online: rawPayload === "online" };
+        }
+      }
 
+      if (!msg) {
+        console.warn(`[mqtt] non-JSON message received on topic ${topic}: ${rawPayload}`);
+        return;
+      }
+
+      // ---- DOSE EVENT ----
       if (topic.endsWith("/dose")) {
         const medId = String(msg.medicationId);
         const med = await prisma.medication.findUnique({ where: { id: medId } });
@@ -69,11 +145,14 @@ export function startMqttBroker(): void {
           }).catch(() => {});
         }
         console.log(`[mqtt] dose recorded ${medId}, remaining ${updated.pillsRemaining}`);
-      } else if (topic.endsWith("/request")) {
+      }
+
+      // ---- SCHEDULE REQUEST ----
+      else if (topic.endsWith("/request")) {
         // Answer a schedule request with the current medication table.
         const meds = await prisma.medication.findMany({ orderBy: { name: "asc" } });
         const schedulePayload = JSON.stringify({
-          type: "schedule",
+          action: "schedule",
           meds: meds.map((m) => ({
             medicationId: m.id,
             name: m.name,
@@ -83,6 +162,47 @@ export function startMqttBroker(): void {
         client.publish(`pillbox/${deviceId}/cmd`, schedulePayload, { qos: 1, retain: true });
         console.log(`[mqtt] published schedule to pillbox/${deviceId}/cmd`);
       }
+
+      // ---- STATUS UPDATE ----
+      else if (topic.endsWith("/status")) {
+        const telemetry = deviceTelemetry.get(deviceId) || createDefaultTelemetry(deviceId);
+        telemetry.online = msg.online ?? true;
+        telemetry.lastSeen = msg.lastSeen ?? Math.floor(Date.now() / 1000);
+        telemetry.uptime = msg.uptime ?? 0;
+        telemetry.freeHeap = msg.freeHeap ?? 0;
+        telemetry.wifiRssi = msg.wifiRssi ?? 0;
+        telemetry.ip = msg.ip ?? "";
+        deviceTelemetry.set(deviceId, telemetry);
+        console.log(`[mqtt] status from ${deviceId}: online=${telemetry.online}`);
+      }
+
+      // ---- TELEMETRY DATA ----
+      else if (topic.endsWith("/telemetry")) {
+        const telemetry = deviceTelemetry.get(deviceId) || createDefaultTelemetry(deviceId);
+        telemetry.ultrasonic = {
+          distance: msg.ultrasonic?.distance ?? 0,
+          handDetected: msg.ultrasonic?.handDetected ?? false,
+        };
+        telemetry.motors = {
+          stepper: {
+            moving: msg.motors?.stepper?.moving ?? false,
+            position: msg.motors?.stepper?.position ?? 0,
+          },
+          servo: {
+            angle: msg.motors?.servo?.angle ?? 0,
+          },
+        };
+        telemetry.buzzer = {
+          active: msg.buzzer?.active ?? false,
+        };
+        telemetry.medSlotCount = msg.medSlotCount ?? 0;
+        deviceTelemetry.set(deviceId, telemetry);
+
+        // Auto-confirm pill retrieval if hand detected near sensor
+        if (telemetry.ultrasonic.handDetected) {
+          console.log(`[mqtt] hand detected by ${deviceId} at ${telemetry.ultrasonic.distance}cm`);
+        }
+      }
     } catch (err) {
       console.error("[mqtt] message handling error:", (err as Error).message);
     }
@@ -91,6 +211,36 @@ export function startMqttBroker(): void {
   client.on("error", (err) => {
     console.error("[mqtt] client error:", err.message);
   });
+
+  client.on("close", () => {
+    // Increment attempts and calculate exponential backoff (max 30s)
+    reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
+    console.warn(`[mqtt] connection closed, retry #${reconnectAttempts} in ${delay}ms`);
+    setTimeout(() => {
+      console.log('[mqtt] attempting reconnection...');
+      startMqttBroker();
+    }, delay);
+  });
+}
+
+function createDefaultTelemetry(deviceId: string): DeviceTelemetry {
+  return {
+    deviceId,
+    online: false,
+    lastSeen: 0,
+    uptime: 0,
+    freeHeap: 0,
+    wifiRssi: 0,
+    ip: "",
+    ultrasonic: { distance: 0, handDetected: false },
+    motors: {
+      stepper: { moving: false, position: 0 },
+      servo: { angle: 0 },
+    },
+    buzzer: { active: false },
+    medSlotCount: 0,
+  };
 }
 
 /**

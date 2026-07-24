@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useRecordDose } from "../lib/queries";
-import { hardwareClient } from "../lib/mqttClient";
+import { hardwareClient, type TelemetryData } from "../lib/mqttClient";
+import { api } from "../lib/api";
 import type { Medication, VoiceProfile } from "../types";
 
 interface LogEntry {
@@ -19,7 +20,8 @@ interface Props {
 /**
  * Hardware control panel — visible entry point for the ESP32 "Z Care" pillbox.
  * Shows the relay/board status, lets you fire a dispense to the real board,
- * and offers a local "simulate dose" so the flow is testable without hardware.
+ * displays real-time telemetry from sensors, and offers a local "simulate dose"
+ * so the flow is testable without hardware.
  */
 export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Props) {
   const [online, setOnline] = useState(false);
@@ -29,15 +31,22 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
   const [log, setLog] = useState<LogEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [doseQuantity, setDoseQuantity] = useState(1);
+  const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
   const recordDose = useRecordDose();
+  const restSeenRef = useRef(false);
+  const restFailCount = useRef(0);
 
-  const push = (kind: LogEntry["kind"], text: string) =>
-    setLog((l) => [{ id: Date.now() + Math.random(), kind, text }, ...l].slice(0, 30));
+  const push = useCallback((kind: LogEntry["kind"], text: string) =>
+    setLog((l) => [{ id: Date.now() + Math.random(), kind, text }, ...l].slice(0, 30)), []);
 
   useEffect(() => {
     if (!open) return;
+    restSeenRef.current = false;
+    restFailCount.current = 0;
+
     const offStatus = hardwareClient.onStatus((o) => {
-      setOnline(o);
+      if (o) setOnline(true);
+      else if (!restSeenRef.current) setOnline(false);
       push("info", o ? "Connected to pillbox relay" : "Relay disconnected — retrying…");
     });
     const offDose = hardwareClient.onDose((medId) => {
@@ -45,12 +54,55 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
       setBoxSeen(true);
       push("dose", `Dose taken: ${med?.name ?? medId} (stock updated)`);
     });
+    const offTelemetry = hardwareClient.onTelemetry((data) => {
+      setTelemetry(data);
+      if (data.ultrasonic.handDetected) {
+        push("info", `Hand detected at ${data.ultrasonic.distance.toFixed(1)}cm`);
+      }
+    });
     hardwareClient.connect();
+
+    // Poll server health to show relay is live; also check for ESP32 data
+    let pollTimer: ReturnType<typeof setInterval>;
+    async function pollDevice() {
+      try {
+        // Server health check — shows "live" as long as server is running
+        const health = await api.get<{ ok: boolean }>("/health");
+        if (health.ok) {
+          restSeenRef.current = true;
+          restFailCount.current = 0;
+          setOnline(true);
+        }
+        // Device telemetry — shows "received dose events" when ESP32 has reported in
+        const data = await api.get<{ devices: any[] }>("/hardware/devices");
+        const device = data.devices?.find((d: any) => d.deviceId === "pillbox-01");
+        if (device) {
+          if (device.lastSeen) setBoxSeen(true);
+          if (device.ultrasonic) {
+            setTelemetry(device as TelemetryData);
+            if (device.ultrasonic.handDetected) {
+              push("info", `Hand detected at ${device.ultrasonic.distance.toFixed(1)}cm`);
+            }
+          }
+        }
+      } catch {
+        restFailCount.current += 1;
+        if (restFailCount.current >= 3) {
+          restSeenRef.current = false;
+          setOnline(false);
+        }
+      }
+    }
+    pollTimer = setInterval(pollDevice, 3000);
+    pollDevice();
+
     return () => {
       offStatus();
       offDose();
+      offTelemetry();
+      clearInterval(pollTimer);
     };
-  }, [open, medications]);
+  }, [open, medications, push]);
 
   if (!open) return null;
 
@@ -64,8 +116,29 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
       return;
     }
     const text = `It's time to take your ${med.name}, ${med.dosage}.`;
-    hardwareClient.fireReminder(med.id, text, defaultVoice?.remoteVoiceId);
-    push("reminder", `Dispense sent for ${med.name} → board`);
+    // Try MQTT first, fall back to REST
+    if (hardwareClient.isConnected()) {
+      hardwareClient.fireReminder(med.id, text, defaultVoice?.remoteVoiceId);
+      push("reminder", `Dispense sent for ${med.name} → board`);
+    } else {
+      api.post("/hardware/devices/pillbox-01/dispense", { medicationId: med.id, text })
+        .then(() => push("reminder", `Dispense sent for ${med.name} → board (REST)`))
+        .catch((e) => push("error", (e as Error).message));
+    }
+  };
+
+  const fireBuzzer = (pattern: "beep" | "alarm" | "off") => {
+    if (!online) {
+      push("error", "Not connected to the relay");
+      return;
+    }
+    if (hardwareClient.isConnected()) {
+      hardwareClient.buzzer(pattern, 2000);
+    } else {
+      api.post("/hardware/devices/pillbox-01/buzzer", { pattern, duration: 2000 })
+        .catch((e) => push("error", (e as Error).message));
+    }
+    push("info", `Buzzer ${pattern} command sent`);
   };
 
   const toggleSim = () => {
@@ -133,6 +206,71 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
             {simOn ? "Disconnect simulated pillbox" : "Connect simulated pillbox"}
           </button>
         </div>
+
+        {/* Real-time Telemetry (when connected to real board) */}
+        {telemetry && (
+          <div className="neumorphic-card p-4 flex flex-col gap-3">
+            <div className="text-sm font-semibold text-textPrimary">Sensor Data</div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="bg-softSurfaceHighlight p-2 rounded-lg">
+                <span className="text-textSecondary">Distance</span>
+                <div className="font-semibold text-textPrimary">
+                  {telemetry.ultrasonic.distance.toFixed(1)} cm
+                </div>
+              </div>
+              <div className="bg-softSurfaceHighlight p-2 rounded-lg">
+                <span className="text-textSecondary">Hand</span>
+                <div className={`font-semibold ${telemetry.ultrasonic.handDetected ? "text-mintGreen" : "text-textSecondary"}`}>
+                  {telemetry.ultrasonic.handDetected ? "Detected" : "None"}
+                </div>
+              </div>
+              <div className="bg-softSurfaceHighlight p-2 rounded-lg">
+                <span className="text-textSecondary">Stepper</span>
+                <div className="font-semibold text-textPrimary">
+                  {telemetry.motors.stepper.moving ? "Moving" : "Idle"}
+                </div>
+              </div>
+              <div className="bg-softSurfaceHighlight p-2 rounded-lg">
+                <span className="text-textSecondary">Servo</span>
+                <div className="font-semibold text-textPrimary">
+                  {telemetry.motors.servo.angle}°
+                </div>
+              </div>
+              <div className="bg-softSurfaceHighlight p-2 rounded-lg">
+                <span className="text-textSecondary">Buzzer</span>
+                <div className={`font-semibold ${telemetry.buzzer.active ? "text-lowStockRed" : "text-textSecondary"}`}>
+                  {telemetry.buzzer.active ? "Active" : "Off"}
+                </div>
+              </div>
+              <div className="bg-softSurfaceHighlight p-2 rounded-lg">
+                <span className="text-textSecondary">Slots</span>
+                <div className="font-semibold text-textPrimary">
+                  {telemetry.medSlotCount}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button
+                onClick={() => fireBuzzer("beep")}
+                className="flex-1 py-2 rounded-xl text-xs font-semibold bg-softSurfaceHighlight text-textPrimary"
+              >
+                Beep
+              </button>
+              <button
+                onClick={() => fireBuzzer("alarm")}
+                className="flex-1 py-2 rounded-xl text-xs font-semibold bg-progressLow text-textOnGradient"
+              >
+                Alarm
+              </button>
+              <button
+                onClick={() => fireBuzzer("off")}
+                className="flex-1 py-2 rounded-xl text-xs font-semibold bg-softSurfaceHighlight text-textPrimary"
+              >
+                Stop
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Test dispenser */}
         <div className="neumorphic-card p-4 flex flex-col gap-3">
@@ -203,10 +341,9 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
         </div>
 
         <p className="text-xs text-textSecondary mt-4 leading-relaxed">
-          To connect a real Z Care ESP32: flash <code>esp32/firmware/firmware.ino</code>, then run
-          the <code>hardware-bridge</code> on a machine on the same LAN as the board (set{" "}
-          <code>BOX_HOST</code> to the ESP32 IP). The board receives the schedule and reports drops
-          automatically.
+          To connect a real Z Care ESP32: flash <code>firmware/esp32/zcare_pillbox.ino</code>, then
+          configure your MQTT broker in the firmware. The board receives the schedule and reports
+          sensor telemetry automatically. Sensor data appears here when connected.
         </p>
       </div>
     </div>

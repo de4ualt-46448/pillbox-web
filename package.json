@@ -16,7 +16,8 @@
     "build": "npm run build --workspaces --if-present",
     "prisma:generate": "npm run prisma:generate -w server",
     "prisma:migrate": "npm run prisma:migrate -w server",
-    "start": "npm run start -w server"
+    "start": "npm run start -w server",
+    "scan": "node scan-project.js"
   },
   "allowScripts": {
     "@prisma/client@5.22.0": true,

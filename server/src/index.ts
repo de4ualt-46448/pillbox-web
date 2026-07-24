@@ -13,6 +13,7 @@ import { medicationRouter } from "./routes/medications.js";
 import { voiceRouter } from "./routes/voice.js";
 import { pushRouter } from "./routes/push.js";
 import { scanRouter } from "./routes/scan.js";
+import { hardwareRouter } from "./routes/hardware.js";
 import { attachHardwareWs } from "./hardwareWs.js";
 import { startMqttBroker } from "./mqttBroker.js";
 
@@ -59,6 +60,7 @@ app.use("/api/medications", medicationRouter);
 app.use("/api/voice", voiceRouter);
 app.use("/api/push", pushRouter);
 app.use("/api/scan", scanRouter);
+app.use("/api/hardware", hardwareRouter);
 
 // Serve the built client in production (optional).
 const clientDist = path.resolve(__dirname, "../../client/dist");
