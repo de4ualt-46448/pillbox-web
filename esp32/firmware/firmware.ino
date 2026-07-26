@@ -46,18 +46,37 @@
 #include <ArduinoJson.h>
 
 // ============================================================
-// Wi-Fi Configuration
+// Wi-Fi Configuration — EDIT THESE before flashing
 // ============================================================
-const char* WIFI_SSID = "WE_3D2278";
-const char* WIFI_PASS = "233d2278";
+const char* WIFI_SSID = "YOUR_WIFI_SSID";
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 WebServer httpServer(80);
 
 // ============================================================
-// MQTT Configuration
+// MQTT Mode — uncomment ONE of the two blocks below
 // ============================================================
-const char* MQTT_HOST   = "broker.hivemq.com";
-const uint16_t MQTT_PORT = 1883;
+//
+// --- LOCAL DEV (server runs `npm run dev` on your computer) ---
+// Set MQTT_HOST to your computer's local IP (e.g. 192.168.1.x).
+// Find it: Windows → ipconfig, macOS → ifconfig, Linux → hostname -I.
+//
+#define MQTT_LOCAL
+#ifdef MQTT_LOCAL
+const char* MQTT_HOST   = "192.168.1.5";   // <-- CHANGE to your computer's LAN IP
+const uint16_t MQTT_PORT = 1883;            // local aedes broker
+#endif
+//
+// --- DEPLOYMENT (server uses an external broker like HiveMQ) ---
+// The server's MQTT_BROKER_URL env var must point to the same broker.
+// No credentials needed for HiveMQ public broker.
+//
+// #define MQTT_DEPLOY
+// #ifdef MQTT_DEPLOY
+// const char* MQTT_HOST   = "broker.hivemq.com";
+// const uint16_t MQTT_PORT = 1883;
+// #endif
+
 const char* DEVICE_ID    = "pillbox-01";
 
 WiFiClient    wifiClient;
@@ -98,6 +117,9 @@ String mqttTopicDose;
 #define MQTT_RETRY_MS          5000
 #define WIFI_RETRY_MS          15000
 #define ULTRASONIC_INTERVAL_MS 100
+
+// Track the last medicationId from a dispense command
+String lastMedicationId = "hand-triggered";
 
 // ============================================================
 // State Machine
@@ -343,7 +365,7 @@ void publishTelemetry() {
 void publishDose() {
   StaticJsonDocument<128> doc;
   doc["type"]         = "dose";
-  doc["medicationId"] = "hand-triggered";
+  doc["medicationId"] = lastMedicationId;
   doc["quantity"]     = 1;
   char buf[128];
   serializeJson(doc, buf);
@@ -390,6 +412,10 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   // --------------------------------------------------------
   else if (strcmp(action, "dispense") == 0 || strcmp(type, "dispense") == 0) {
     if (currentState == STATE_IDLE || currentState == STATE_ARMED) {
+      if (doc.containsKey("medicationId")) {
+        lastMedicationId = String((const char*)doc["medicationId"]);
+        Serial.printf("[system] storing medicationId %s\n", lastMedicationId.c_str());
+      }
       if (currentState == STATE_ARMED) {
         Serial.println(F("[system] dispense while armed -> triggering"));
       } else {
@@ -564,6 +590,12 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println(F("\n=== Z Care WiFi + MQTT Smart Pillbox ==="));
+#ifdef MQTT_LOCAL
+  Serial.println(F("Mode: LOCAL DEV (connects to your computer's MQTT broker)"));
+#elif defined(MQTT_DEPLOY)
+  Serial.println(F("Mode: DEPLOYMENT (connects to external MQTT broker)"));
+#endif
+  Serial.printf("MQTT Host: %s:%u\n", MQTT_HOST, MQTT_PORT);
   Serial.printf("Pins: servo=%d trig=%d echo=%d buzzer=%d (ACTIVE)\n",
                 SERVO_PIN, ULTRASONIC_TRIG, ULTRASONIC_ECHO, BUZZER_PIN);
   Serial.printf("Hand threshold: %u cm | Alarm timeout: %u ms | Hold: %u ms\n",

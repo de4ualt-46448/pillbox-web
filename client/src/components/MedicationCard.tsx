@@ -1,4 +1,4 @@
-import { Medication } from "../types";
+import type { Medication } from "../types";
 import { StockDrainBar } from "./StockDrainBar";
 
 interface MedicationCardProps {

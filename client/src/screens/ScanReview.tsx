@@ -43,14 +43,18 @@ export function ScanReview() {
 
   const parsed: ParsedMedication = useMemo(() => {
     if (nvidiaParsed) {
-      return {
-        name: nvidiaParsed.name ?? null,
-        dosage: nvidiaParsed.dosage ?? null,
-        frequency: nvidiaParsed.frequency ?? null,
-        timesOfDay: Array.isArray(nvidiaParsed.timesOfDay) ? nvidiaParsed.timesOfDay : [],
-        totalQuantity: typeof nvidiaParsed.totalQuantity === "number" ? nvidiaParsed.totalQuantity : null,
-        quantityPerDose: typeof nvidiaParsed.quantityPerDose === "number" ? nvidiaParsed.quantityPerDose : null,
-      };
+      const hasData = nvidiaParsed.name || nvidiaParsed.dosage || nvidiaParsed.frequency ||
+        (nvidiaParsed.timesOfDay?.length) || nvidiaParsed.totalQuantity || nvidiaParsed.quantityPerDose;
+      if (hasData) {
+        return {
+          name: nvidiaParsed.name ?? null,
+          dosage: nvidiaParsed.dosage ?? null,
+          frequency: nvidiaParsed.frequency ?? null,
+          timesOfDay: Array.isArray(nvidiaParsed.timesOfDay) ? nvidiaParsed.timesOfDay : [],
+          totalQuantity: typeof nvidiaParsed.totalQuantity === "number" ? nvidiaParsed.totalQuantity : null,
+          quantityPerDose: typeof nvidiaParsed.quantityPerDose === "number" ? nvidiaParsed.quantityPerDose : null,
+        };
+      }
     }
     return parsePrescription(rawText);
   }, [nvidiaParsed, rawText]);

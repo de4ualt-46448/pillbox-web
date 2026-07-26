@@ -11,8 +11,6 @@ import { UPLOAD_DIR } from "../config.js";
 
 export const voiceRouter = Router();
 
-voiceRouter.use(requireAuth);
-
 const profileToJson = (p: {
   id: string;
   displayName: string;
@@ -37,7 +35,7 @@ const profileToJson = (p: {
 const upload = multer({ dest: UPLOAD_DIR, limits: { fileSize: 25 * 1024 * 1024 } });
 
 // GET /api/voice-profiles
-voiceRouter.get("/", async (req, res) => {
+voiceRouter.get("/", requireAuth, async (req, res) => {
   const auth = getAuth(req);
   const profiles = await prisma.voiceProfile.findMany({
     where: { userId: auth.userId },
@@ -47,7 +45,7 @@ voiceRouter.get("/", async (req, res) => {
 });
 
 // POST /api/voice-profiles  (built-in / local voice)
-voiceRouter.post("/", async (req, res) => {
+voiceRouter.post("/", requireAuth, async (req, res) => {
   const schema = z.object({
     displayName: z.string().min(1),
     engine: z.enum(["LOCAL_TTS", "CLONED_REMOTE"]).default("LOCAL_TTS"),
@@ -73,7 +71,7 @@ voiceRouter.post("/", async (req, res) => {
 });
 
 // POST /api/voice/clone  (upload a sample, clone via ElevenLabs)
-voiceRouter.post("/clone", upload.single("sample"), async (req, res) => {
+voiceRouter.post("/clone", requireAuth, upload.single("sample"), async (req, res) => {
   const auth = getAuth(req);
   const name = (req.body.name as string) || "Cloned Voice";
   if (!req.file) {
@@ -105,7 +103,7 @@ voiceRouter.post("/clone", upload.single("sample"), async (req, res) => {
 });
 
 // POST /api/voice/record  (upload a recorded voice clip -> played back as the alarm)
-voiceRouter.post("/record", upload.single("sample"), async (req, res) => {
+voiceRouter.post("/record", requireAuth, upload.single("sample"), async (req, res) => {
   const auth = getAuth(req);
   const name = (req.body.name as string) || "My Voice";
   if (!req.file) {
@@ -132,10 +130,11 @@ voiceRouter.post("/record", upload.single("sample"), async (req, res) => {
 });
 
 // GET /api/voice/recording/:id  (stream the stored recording for playback)
+// No requireAuth — browser Audio elements cannot send Authorization headers.
+// The recording UUID is only discoverable through the authenticated listing.
 voiceRouter.get("/recording/:id", async (req, res) => {
-  const auth = getAuth(req);
-  const profile = await prisma.voiceProfile.findFirst({
-    where: { id: req.params.id, userId: auth.userId },
+  const profile = await prisma.voiceProfile.findUnique({
+    where: { id: req.params.id },
   });
   if (!profile || !profile.audioPath) {
     res.status(404).json({ error: "Recording not found" });
@@ -155,7 +154,7 @@ voiceRouter.get("/recording/:id", async (req, res) => {
 });
 
 // POST /api/voice-profiles/:id/default
-voiceRouter.post("/:id/default", async (req, res) => {
+voiceRouter.post("/:id/default", requireAuth, async (req, res) => {
   const auth = getAuth(req);
   const profile = await prisma.voiceProfile.findFirst({
     where: { id: req.params.id, userId: auth.userId },
@@ -178,7 +177,7 @@ voiceRouter.post("/:id/default", async (req, res) => {
 });
 
 // GET /api/voice/synthesize/:voiceId?text=...  (returns audio bytes for playback)
-voiceRouter.get("/synthesize/:voiceId", async (req, res) => {
+voiceRouter.get("/synthesize/:voiceId", requireAuth, async (req, res) => {
   const text = (req.query.text as string) || "This is your medication reminder.";
   try {
     const audio = await synthesize(req.params.voiceId, text);
@@ -190,7 +189,7 @@ voiceRouter.get("/synthesize/:voiceId", async (req, res) => {
 });
 
 // DELETE /api/voice-profiles/:id
-voiceRouter.delete("/:id", async (req, res) => {
+voiceRouter.delete("/:id", requireAuth, async (req, res) => {
   const auth = getAuth(req);
   const profile = await prisma.voiceProfile.findFirst({
     where: { id: req.params.id, userId: auth.userId },

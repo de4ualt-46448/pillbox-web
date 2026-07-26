@@ -1,4 +1,4 @@
-const NVIDIA_API_KEY = "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";
+const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || "YOUR_NVIDIA_API_KEY";
 const url = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 // 1x1 red PNG

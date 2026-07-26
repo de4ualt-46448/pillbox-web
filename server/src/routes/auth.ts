@@ -9,6 +9,7 @@ import {
   setRefreshCookie,
   clearRefreshCookie,
   verifyToken,
+  verifyRefreshToken,
   requireAuth,
   getAuth,
 } from "../auth.js";
@@ -69,7 +70,7 @@ authRouter.post("/refresh", (req, res) => {
     return;
   }
   try {
-    const payload = verifyToken(token);
+    const payload = verifyRefreshToken(token);
     res.json({ accessToken: signAccessToken(payload) });
   } catch {
     clearRefreshCookie(res);

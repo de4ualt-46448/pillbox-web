@@ -39,6 +39,12 @@ export function useReminders({ enabled, medications, voiceProfiles, onFire }: Re
     const tick = () => {
       const now = new Date();
       const today = dayKey();
+      // Prune stale entries from previous days to prevent memory growth
+      for (const key of firedToday.current) {
+        if (!key.startsWith(today)) {
+          firedToday.current.delete(key);
+        }
+      }
       for (const med of medications) {
         for (const time of med.timesOfDay) {
           const [h, m] = time.split(":").map(Number);

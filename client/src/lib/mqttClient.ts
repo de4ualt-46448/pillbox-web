@@ -19,19 +19,16 @@ import mqtt, { type MqttClient } from "mqtt";
 
 const DEFAULT_DEVICE_ID = "pillbox-01";
 
+// MQTT broker WebSocket endpoint.
+// Local dev: aedes broker on ws://localhost:8888
+// Production / external: override via VITE_MQTT_WS_URL env var.
 const isLocalhost = typeof window !== "undefined" && (
   window.location.hostname === "localhost" ||
   window.location.hostname === "127.0.0.1" ||
   window.location.hostname.startsWith("192.168.") ||
   window.location.hostname.startsWith("10.")
 );
-
 const defaultWsUrl = isLocalhost ? "ws://localhost:8888" : "ws://broker.hivemq.com:8000/mqtt";
-
-// MQTT broker WebSocket endpoint.
-// HiveMQ public broker: ws://broker.hivemq.com:8000/mqtt
-// Local dev (when server runs its own aedes): ws://localhost:8888
-// Override via VITE_MQTT_WS_URL env var.
 const MQTT_WS_URL =
   (import.meta as any).env?.VITE_MQTT_WS_URL || defaultWsUrl;
 
@@ -79,6 +76,7 @@ export interface DeviceStatus {
 class MqttHardwareClient {
   private deviceId = DEFAULT_DEVICE_ID;
   private client: MqttClient | null = null;
+  private connecting = false;
   private sim = false;
   private doseHandlers = new Set<DoseHandler>();
   private statusHandlers = new Set<StatusHandler>();
@@ -92,19 +90,32 @@ class MqttHardwareClient {
   }
 
   connect(): void {
-    if (this.client && this.client.connected) return;
+    if (this.client?.connected) return;
+    if (this.connecting) return;
+    this.connecting = true;
     const url = MQTT_WS_URL;
+    console.log(`[mqtt] connecting to ${url}...`);
     this.client = mqtt.connect(url, {
       reconnectPeriod: 3000,
       clientId: `web-${Math.random().toString(16).slice(2)}`,
     });
 
+    const onDone = () => { this.connecting = false; };
+
     this.client.on("connect", () => {
+      console.log(`[mqtt] connected to ${url}`);
       this.resubscribe();
       this.emitStatus(true);
     });
-    this.client.on("close", () => this.emitStatus(false));
-    this.client.on("error", () => {});
+    this.client.on("close", () => {
+      console.log(`[mqtt] disconnected from ${url}`);
+      this.connecting = false;
+      this.emitStatus(false);
+    });
+    this.client.on("error", (err) => {
+      console.error(`[mqtt] error:`, err.message);
+      onDone();
+    });
     this.client.on("message", (topic, payload) => {
       const rawPayload = payload.toString().trim();
       let msg: any;

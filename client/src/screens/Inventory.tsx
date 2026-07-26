@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useMedications } from "../lib/queries";
 import { MedicationCard } from "../components/MedicationCard";
 import { useAuth } from "../store/auth";
-import { subscribeToPush, isPushSubscribed } from "../lib/push";
+import { subscribeToPush, unsubscribeFromPush, isPushSubscribed } from "../lib/push";
 
 /** "The Green Menu" — main inventory dashboard (ports InventoryScreen.kt). */
 export function Inventory() {
@@ -19,8 +19,8 @@ export function Inventory() {
 
   const togglePush = async () => {
     if (pushEnabled) {
+      await unsubscribeFromPush();
       setPushEnabled(false);
-      // TODO: unsubscribe
     } else {
       const ok = await subscribeToPush();
       setPushEnabled(ok);

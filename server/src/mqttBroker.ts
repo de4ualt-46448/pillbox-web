@@ -5,6 +5,7 @@ import { MQTT_BROKER_URL } from "./config.js";
 
 // Module-scoped reconnection attempts counter for exponential backoff
 let reconnectAttempts = 0;
+let localBrokerStarted = false;
 
 /**
  * MQTT client for the Z Care pillbox.
@@ -77,14 +78,19 @@ export function startMqttBroker(): void {
 
   if (isExternal) {
     console.log(`[mqtt] connecting to external broker: ${brokerUrl}`);
-  } else {
+  } else if (!localBrokerStarted) {
     console.log("[mqtt] no MQTT_BROKER_URL set, starting local broker...");
     startLocalBroker();
+    localBrokerStarted = true;
   }
 
   // --- Server-side client (dose recording + schedule answers) ---
+  // Disable auto-reconnect — we handle reconnection manually with exponential backoff
+  connectClient(brokerUrl);
+}
 
-  mqttClient = mqtt.connect(brokerUrl);
+function connectClient(brokerUrl: string): void {
+  mqttClient = mqtt.connect(brokerUrl, { reconnectPeriod: 0 });
   const client = mqttClient;
 
   client.on("connect", () => {
@@ -219,7 +225,8 @@ export function startMqttBroker(): void {
     console.warn(`[mqtt] connection closed, retry #${reconnectAttempts} in ${delay}ms`);
     setTimeout(() => {
       console.log('[mqtt] attempting reconnection...');
-      startMqttBroker();
+      // Only reconnect the client, not restart the broker
+      connectClient(brokerUrl);
     }, delay);
   });
 }

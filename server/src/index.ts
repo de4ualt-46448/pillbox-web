@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import { createServer } from "node:http";
 import fs from "node:fs";
@@ -52,6 +53,7 @@ const authLimiter = rateLimit({
   message: { error: "Too many authentication attempts, please try again later" },
 });
 
+app.use(cookieParser());
 app.use(express.json({ limit: "20mb" }));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, timestamp: Date.now() }));

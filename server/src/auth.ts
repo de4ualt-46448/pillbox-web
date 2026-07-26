@@ -31,6 +31,10 @@ export function verifyToken(token: string): AuthPayload {
   return jwt.verify(token, JWT_SECRET) as AuthPayload;
 }
 
+export function verifyRefreshToken(token: string): AuthPayload {
+  return jwt.verify(token, JWT_REFRESH_SECRET) as AuthPayload;
+}
+
 export function setRefreshCookie(res: Response, token: string): void {
   res.cookie("pillbox_refresh", token, {
     httpOnly: true,

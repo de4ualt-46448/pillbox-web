@@ -14,7 +14,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().default("file:./dev.db"),
   MQTT_BROKER_URL: z.string().optional(),
   GROQ_API_KEY: z.string().default(""),
-  GEMINI_API_KEY: z.string().default(""),
+  OPENAI_API_KEY: z.string().default(""),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -42,4 +42,4 @@ export const JWT_SECRET = env.JWT_SECRET;
 export const JWT_REFRESH_SECRET = env.JWT_REFRESH_SECRET;
 export const MQTT_BROKER_URL = env.MQTT_BROKER_URL;
 export const GROQ_API_KEY = env.GROQ_API_KEY;
-export const GEMINI_API_KEY = env.GEMINI_API_KEY;
+export const OPENAI_API_KEY = env.OPENAI_API_KEY;

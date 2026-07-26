@@ -271,18 +271,14 @@ export function MedicationDetail() {
 function StepperButton({
   label,
   onClick,
-  filled = false,
 }: {
   label: string;
   onClick: () => void;
-  filled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl text-textOnGradient ${
-        filled ? "bg-brandGradient" : "bg-tealAccent"
-      }`}
+      className="w-10 h-10 rounded-xl flex items-center justify-center text-xl text-textOnGradient bg-tealAccent"
     >
       {label}
     </button>

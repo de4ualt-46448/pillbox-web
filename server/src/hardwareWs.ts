@@ -168,6 +168,7 @@ export function attachHardwareWs(server: Server): void {
       }
 
       if (msg.type === "refreshSchedule") {
+        if (bridgeUserId && bridgeUserId !== ws.userId) return;
         bridgeUserId = ws.userId!;
         await pushSchedule();
         return;

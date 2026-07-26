@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRecordDose } from "../lib/queries";
 import { hardwareClient, type TelemetryData } from "../lib/mqttClient";
 import { api } from "../lib/api";
@@ -33,21 +33,28 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
   const [doseQuantity, setDoseQuantity] = useState(1);
   const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
   const recordDose = useRecordDose();
-  const restSeenRef = useRef(false);
-  const restFailCount = useRef(0);
 
   const push = useCallback((kind: LogEntry["kind"], text: string) =>
     setLog((l) => [{ id: Date.now() + Math.random(), kind, text }, ...l].slice(0, 30)), []);
 
   useEffect(() => {
     if (!open) return;
-    restSeenRef.current = false;
-    restFailCount.current = 0;
+
+    // Reflect current connection state immediately (MQTT may already be connected)
+    setOnline(hardwareClient.isConnected());
+
+    // If we already have a status from before the panel opened, mark box as seen
+    const existing = hardwareClient.getLatestStatus();
+    if (existing?.online) setBoxSeen(true);
 
     const offStatus = hardwareClient.onStatus((o) => {
-      if (o) setOnline(true);
-      else if (!restSeenRef.current) setOnline(false);
-      push("info", o ? "Connected to pillbox relay" : "Relay disconnected — retrying…");
+      setOnline(o);
+      if (o) {
+        setBoxSeen(true);
+        push("info", "MQTT connected to broker");
+      } else {
+        push("info", "MQTT disconnected — retrying…");
+      }
     });
     const offDose = hardwareClient.onDose((medId) => {
       const med = medications.find((m) => m.id === medId);
@@ -60,20 +67,10 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
         push("info", `Hand detected at ${data.ultrasonic.distance.toFixed(1)}cm`);
       }
     });
-    hardwareClient.connect();
-
-    // Poll server health to show relay is live; also check for ESP32 data
+    // Poll server for ESP32 device data (real board telemetry)
     let pollTimer: ReturnType<typeof setInterval>;
     async function pollDevice() {
       try {
-        // Server health check — shows "live" as long as server is running
-        const health = await api.get<{ ok: boolean }>("/health");
-        if (health.ok) {
-          restSeenRef.current = true;
-          restFailCount.current = 0;
-          setOnline(true);
-        }
-        // Device telemetry — shows "received dose events" when ESP32 has reported in
         const data = await api.get<{ devices: any[] }>("/hardware/devices");
         const device = data.devices?.find((d: any) => d.deviceId === "pillbox-01");
         if (device) {
@@ -86,14 +83,10 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
           }
         }
       } catch {
-        restFailCount.current += 1;
-        if (restFailCount.current >= 3) {
-          restSeenRef.current = false;
-          setOnline(false);
-        }
+        // Server might not have /hardware/devices endpoint — that's ok
       }
     }
-    pollTimer = setInterval(pollDevice, 3000);
+    pollTimer = setInterval(pollDevice, 5000);
     pollDevice();
 
     return () => {
@@ -145,10 +138,12 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
     if (simOn) {
       hardwareClient.disconnectSim();
       setSimOn(false);
+      setBoxSeen(false);
       push("info", "Simulated pillbox disconnected");
     } else {
       hardwareClient.connectSim();
       setSimOn(true);
+      setBoxSeen(true);
       push("info", "Simulated pillbox connected — connector is live");
     }
   };
@@ -186,7 +181,7 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
           <StatusRow
             label="Pillbox board (ESP32)"
             ok={boxSeen}
-            hint={boxSeen ? "received dose events" : "no board seen yet"}
+            hint={simOn ? "simulated" : boxSeen ? "received dose events" : "no board seen yet"}
           />
         </div>
 
@@ -341,9 +336,11 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
         </div>
 
         <p className="text-xs text-textSecondary mt-4 leading-relaxed">
-          To connect a real Z Care ESP32: flash <code>firmware/esp32/zcare_pillbox.ino</code>, then
-          configure your MQTT broker in the firmware. The board receives the schedule and reports
-          sensor telemetry automatically. Sensor data appears here when connected.
+          To connect a real Z Care ESP32: flash <code>esp32/firmware/firmware.ino</code>, then
+          configure your Wi-Fi credentials and MQTT broker in the firmware's top section.
+          For local dev, set <code>MQTT_HOST</code> to your computer's LAN IP.
+          For deployment, switch to <code>MQTT_DEPLOY</code> and set the server's
+          <code>MQTT_BROKER_URL</code> to the same broker.
         </p>
       </div>
     </div>
