@@ -1,3 +1,5 @@
+import { API_BASE } from "./api";
+
 /**
  * Local text-to-speech using the browser's Web Speech API (SpeechSynthesis).
  * Mirrors the LOCAL_TTS branch of the Android TextToSpeechManager. Cloned
@@ -21,7 +23,7 @@ export function speakLocal(text: string, localeTag?: string | null): Promise<voi
 export function speakCloned(text: string, voiceId: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const audio = new Audio(
-      `/api/voice/synthesize/${encodeURIComponent(voiceId)}?text=${encodeURIComponent(text)}`,
+      `${API_BASE}/api/voice/synthesize/${encodeURIComponent(voiceId)}?text=${encodeURIComponent(text)}`,
     );
     audio.onended = () => resolve();
     audio.onerror = () => reject(new Error("Playback failed"));

@@ -30,7 +30,7 @@
   "main": "index.js",
   "keywords": [],
   "type": "commonjs",
-  "dependencies": {
-    "playwright": "^1.61.1"
+  "engines": {
+    "node": ">=20"
   }
 }

@@ -1,5 +1,8 @@
 const TOKEN_KEY = "pillbox_access_token";
 
+/** Base URL for API calls. Override at build time with VITE_API_URL (e.g. the Railway/Render backend). */
+export const API_BASE = ((import.meta as any).env?.VITE_API_URL || "").replace(/\/$/, "");
+
 let accessToken: string | null = localStorage.getItem(TOKEN_KEY);
 let onUnauthorized: (() => void) | null = null;
 
@@ -20,7 +23,7 @@ export function setUnauthorizedHandler(cb: () => void): void {
 
 async function refreshOnce(): Promise<boolean> {
   try {
-    const res = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+    const res = await fetch(`${API_BASE}/api/auth/refresh`, { method: "POST", credentials: "include" });
     if (!res.ok) return false;
     const data = await res.json();
     setAccessToken(data.accessToken);
@@ -50,7 +53,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     }
   }
 
-  let res = await fetch(`/api${path}`, {
+  let res = await fetch(`${API_BASE}/api${path}`, {
     method,
     headers,
     body: payload,
@@ -61,7 +64,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     const refreshed = await refreshOnce();
     if (refreshed) {
       headers["Authorization"] = `Bearer ${accessToken}`;
-      res = await fetch(`/api${path}`, { method, headers, body: payload, credentials: "include" });
+      res = await fetch(`${API_BASE}/api${path}`, { method, headers, body: payload, credentials: "include" });
     }
   }
 

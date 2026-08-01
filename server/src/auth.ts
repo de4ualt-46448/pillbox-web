@@ -36,10 +36,13 @@ export function verifyRefreshToken(token: string): AuthPayload {
 }
 
 export function setRefreshCookie(res: Response, token: string): void {
+  const production = process.env.NODE_ENV === "production";
   res.cookie("pillbox_refresh", token, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    // Frontend and API may live on different origins (Netlify + Railway),
+    // so the refresh cookie must be sent on cross-site XHR/fetch requests.
+    sameSite: production ? "none" : "lax",
+    secure: production,
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 }

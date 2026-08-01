@@ -28,7 +28,12 @@ const isLocalhost = typeof window !== "undefined" && (
   window.location.hostname.startsWith("192.168.") ||
   window.location.hostname.startsWith("10.")
 );
-const defaultWsUrl = isLocalhost ? "ws://localhost:8888" : "ws://broker.hivemq.com:8000/mqtt";
+const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+const defaultWsUrl = isLocalhost
+  ? "ws://localhost:8888"
+  : isHttps
+    ? "wss://broker.hivemq.com:8884/mqtt"
+    : "ws://broker.hivemq.com:8000/mqtt";
 const MQTT_WS_URL =
   (import.meta as any).env?.VITE_MQTT_WS_URL || defaultWsUrl;
 

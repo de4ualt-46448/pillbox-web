@@ -1,0 +1,37 @@
+# Netlify deployment for the Pillbox frontend (React/Vite static site).
+# The Express API keeps running on Railway/Render (see railway.json / render.yaml).
+#
+# To connect the frontend to your API:
+#   1. In the Netlify dashboard, add an environment variable:
+#      VITE_API_URL = https://your-backend.up.railway.app   (no trailing slash)
+#      VITE_MQTT_WS_URL = wss://broker.hivemq.com:8884/mqtt  (optional override)
+#   2. On the backend service set CLIENT_ORIGIN = https://your-site.netlify.app
+#      so CORS allows the frontend origin (credentials are required).
+
+[build]
+  command = "npm install && npm run build -w client"
+  publish = "client/dist"
+
+# Point Netlify Functions at an empty dir so it ignores the Firebase
+# functions/ folder (which is not Netlify-compatible).
+[functions]
+  directory = "netlify/functions"
+
+# Pin Node.js to the same major as .nvmrc (Vite 8 needs >= 20.19 / >= 22.12)
+[build.environment]
+  NODE_VERSION = "22"
+
+# SPA fallback: let react-router handle client-side routes.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Optional: proxy API calls through Netlify so the browser talks to one origin
+# (no CORS/cookie cross-origin needed). Replace the target with your backend,
+# then you can skip setting VITE_API_URL.
+# [[redirects]]
+#   from = "/api/*"
+#   to = "https://your-backend.up.railway.app/api/:splat"
+#   status = 200
+#   force = true

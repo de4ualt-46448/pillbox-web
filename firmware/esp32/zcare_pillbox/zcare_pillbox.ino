@@ -31,25 +31,29 @@ const char* WIFI_SSID = "YOUR_WIFI_SSID";
 const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 // ============================================================
-// MQTT Mode — uncomment ONE block below
+// MQTT Mode — uncomment ONE block below.
+// DEPLOYMENT is the default: it uses the public HiveMQ broker so the
+// board works on ANY network alongside the Railway-hosted server
+// (whose MQTT_BROKER_URL also points at broker.hivemq.com).
 // ============================================================
 //
-// --- LOCAL DEV (server runs "npm run dev" on your computer) ---
-// Set MQTT_HOST to your computer's LAN IP (find with: ipconfig / ifconfig / hostname -I)
-//
-#define MQTT_LOCAL
-#ifdef MQTT_LOCAL
-const char* MQTT_HOST   = "192.168.1.5";   // <-- CHANGE to your computer's LAN IP
-const uint16_t MQTT_PORT = 1883;            // local aedes broker
-#endif
-//
-// --- DEPLOYMENT (server uses an external broker like HiveMQ) ---
+// --- DEPLOYMENT (default) — works from any network ---
 // Server's MQTT_BROKER_URL env var must point to the same broker.
 //
-// #define MQTT_DEPLOY
-// #ifdef MQTT_DEPLOY
-// const char* MQTT_HOST   = "broker.hivemq.com";
-// const uint16_t MQTT_PORT = 1883;
+#define MQTT_DEPLOY
+#ifdef MQTT_DEPLOY
+const char* MQTT_HOST   = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+#endif
+//
+// --- LOCAL DEV (server runs "npm run dev" on your computer) ---
+// Uncomment MQTT_LOCAL (and comment MQTT_DEPLOY above), then set
+// MQTT_HOST to your computer's LAN IP (find with: ipconfig / ifconfig).
+//
+// #define MQTT_LOCAL
+// #ifdef MQTT_LOCAL
+// const char* MQTT_HOST   = "192.168.1.5";   // <-- CHANGE to your computer's LAN IP
+// const uint16_t MQTT_PORT = 1883;            // local aedes broker
 // #endif
 
 const char* DEVICE_ID = "pillbox-01";
@@ -67,7 +71,7 @@ String mqttTopicRequest;
 // ============================================================
 // Pin Definitions
 // ============================================================
-#define SERVO_PIN       23
+#define SERVO_PIN       22
 #define ULTRASONIC_TRIG 18
 #define ULTRASONIC_ECHO 19
 #define BUZZER_PIN      4
