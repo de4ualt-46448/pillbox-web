@@ -62,6 +62,56 @@ npm run dev
 3. Connect simulated pillbox or real ESP32
 4. Test dispensing and monitoring
 
+## Deploy to Railway
+
+The app deploys as **one Node service** (serving the Express API *and* the built
+React client) plus **one PostgreSQL database**. MQTT runs over the public HiveMQ
+broker so the deployed server and the ESP32 work together from **any network**
+(not just localhost/LAN).
+
+### 1. Create the project
+
+1. Push this repo to GitHub.
+2. In Railway: **New Project → Deploy from GitHub repo**.
+3. Add a **PostgreSQL** database service to the project
+   (**New → Database → PostgreSQL**).
+
+### 2. Set environment variables
+
+On the Node service, go to **Variables** and set (see `.env.example`):
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference the Postgres service) |
+| `JWT_SECRET` | a long random string (`openssl rand -hex 32`) |
+| `JWT_REFRESH_SECRET` | a different long random string |
+| `MQTT_BROKER_URL` | `mqtt://broker.hivemq.com:1883` |
+| `NODE_ENV` | `production` |
+
+Optional: `CLIENT_ORIGIN`, `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (for web
+push), and any AI API keys (`ELEVENLABS_API_KEY`, `NVIDIA_API_KEY`, etc.).
+
+### 3. Deploy
+
+Railway runs `railway.json` automatically:
+
+- **Build** — installs deps, builds the client (`vite build` → `client/dist`),
+  runs `prisma generate`.
+- **Start** — applies the schema (`prisma db push`) then boots the server via
+  `tsx`. Health is checked on `/api/health`.
+
+The server serves the client at its root URL, so the web app is available at
+the Railway-generated domain once the deploy turns green.
+
+### 4. Point the ESP32 at the same broker
+
+So the board can reach the deployed server from any network, set the firmware's
+MQTT broker host to `broker.hivemq.com` (port `1883`). The board and the server
+then share the same public broker and exchange messages over the internet.
+
+> The `hardware-bridge` workspace is **not** deployed — it's a local LAN helper
+> for development only.
+
 ## File Structure
 
 ```
@@ -133,7 +183,7 @@ pillbox-web/
 - **Backend:** Express, TypeScript, Prisma ORM
 - **Hardware:** ESP32, Arduino, PubSubClient
 - **Protocol:** MQTT over TCP/WebSocket
-- **Database:** SQLite (development), PostgreSQL (production)
+- **Database:** PostgreSQL (local dev can use SQLite with a `provider = "sqlite"` schema)
 
 ## License
 
