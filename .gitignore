@@ -37,3 +37,6 @@ Thumbs.db
 # Prisma
 server/prisma/dev.db
 server/prisma/dev.db-journal
+
+# Local Netlify folder
+.netlify

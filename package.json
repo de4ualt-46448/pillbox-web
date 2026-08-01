@@ -32,5 +32,8 @@
   "type": "commonjs",
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "netlify-cli": "^27.0.1"
   }
 }
