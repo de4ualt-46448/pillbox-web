@@ -5,6 +5,12 @@ import {
   GROQ_API_KEY,
   GROQ_BASE_URL,
   GROQ_OCR_MODEL,
+  GEMINI_API_KEY,
+  GEMINI_BASE_URL,
+  GEMINI_OCR_MODEL,
+  OPENROUTER_API_KEY,
+  OPENROUTER_BASE_URL,
+  OPENROUTER_OCR_MODEL,
   NVIDIA_API_KEY,
   NVIDIA_BASE_URL,
   NVIDIA_OCR_MODEL,
@@ -23,7 +29,7 @@ const upload = multer({
 
 scanRouter.use(requireAuth);
 
-type Provider = "nvidia" | "openai" | "groq";
+type Provider = "gemini" | "openrouter" | "nvidia" | "openai" | "groq";
 type ScanMode = "label" | "prescription";
 
 type Confidence = {
@@ -54,6 +60,8 @@ type ScanResult = {
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_GROQ_MODEL = "qwen/qwen3.6-27b";
 
 const OCR_PROMPT = `You are a high-accuracy OCR and medication-data extraction engine for a medication app used in Egypt. The image is a ${"{{MODE}}"}.
@@ -97,7 +105,9 @@ function endpoint(baseUrl: string): string {
 
 export function configuredProviders(): Provider[] {
   const available: Provider[] = [];
-  // Qwen 3.6 is the preferred path for Arabic/English OCR; retain the configured fallbacks.
+  // Gemini is the primary configured path; OpenRouter is a multimodal fallback, then the existing providers.
+  if (GEMINI_API_KEY) available.push("gemini");
+  if (OPENROUTER_API_KEY) available.push("openrouter");
   if (GROQ_API_KEY) available.push("groq");
   if (NVIDIA_API_KEY) available.push("nvidia");
   if (OPENAI_API_KEY) available.push("openai");
@@ -244,8 +254,71 @@ async function callProvider(provider: Provider, imageDataUrl: string, mode: Scan
   let url: string;
   let body: Record<string, unknown>;
   let apiKey: string;
+  const startedAt = Date.now();
 
-  if (provider === "nvidia") {
+  if (provider === "gemini") {
+    const geminiBase = GEMINI_BASE_URL || DEFAULT_GEMINI_BASE_URL;
+    const base64Match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/s);
+    if (!base64Match) throw new Error("gemini requires an inline base64 image");
+    const schema = {
+      type: "object",
+      properties: {
+        name: { type: "string", nullable: true },
+        dosage: { type: "string", nullable: true },
+        frequency: { type: "string", nullable: true },
+        timesOfDay: { type: "array", items: { type: "string" } },
+        totalQuantity: { type: "number", nullable: true },
+        quantityPerDose: { type: "number", nullable: true },
+        rawText: { type: "string" },
+        confidence: {
+          type: "object",
+          properties: {
+            name: { type: "number", nullable: true }, dosage: { type: "number", nullable: true },
+            frequency: { type: "number", nullable: true }, totalQuantity: { type: "number", nullable: true },
+            quantityPerDose: { type: "number", nullable: true },
+          },
+          required: ["name", "dosage", "frequency", "totalQuantity", "quantityPerDose"],
+        },
+        warnings: { type: "array", items: { type: "string" } },
+      },
+      required: ["name", "dosage", "frequency", "timesOfDay", "totalQuantity", "quantityPerDose", "rawText", "confidence", "warnings"],
+    };
+    const geminiBody = {
+      contents: [{ role: "user", parts: [
+        { text: prompt },
+        { inline_data: { mime_type: base64Match[1], data: base64Match[2] } },
+      ] }],
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json",
+        responseSchema: schema,
+      },
+    };
+    const response = await fetch(`${geminiBase.replace(/\/$/, "")}/models/${encodeURIComponent(GEMINI_OCR_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(geminiBody),
+      signal: AbortSignal.timeout(OCR_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`gemini returned HTTP ${response.status}: ${(await response.text()).slice(0, 400)}`);
+    const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("\n") ?? "";
+    if (!text) throw new Error("gemini returned an empty OCR response");
+    const result = parseOcrResponse(text, provider);
+    console.log(`[scan] ${provider} OCR ${result.status} in ${Date.now() - startedAt}ms`);
+    return result;
+  } else if (provider === "openrouter") {
+    url = endpoint(OPENROUTER_BASE_URL || DEFAULT_OPENROUTER_BASE_URL);
+    apiKey = OPENROUTER_API_KEY;
+    body = {
+      model: OPENROUTER_OCR_MODEL,
+      messages,
+      max_tokens: 1800,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      stream: false,
+    };
+  } else if (provider === "nvidia") {
     url = endpoint(NVIDIA_BASE_URL);
     apiKey = NVIDIA_API_KEY;
     body = { model: NVIDIA_OCR_MODEL, messages, max_tokens: 1800, temperature: 0, top_p: 0.1, stream: false };
@@ -267,7 +340,6 @@ async function callProvider(provider: Provider, imageDataUrl: string, mode: Scan
     };
   }
 
-  const startedAt = Date.now();
   const response = await fetch(url, {
     method: "POST",
     headers: {

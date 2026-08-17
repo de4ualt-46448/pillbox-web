@@ -8,6 +8,12 @@ const envSchema = z.object({
   NVIDIA_API_KEY: z.string().default(""),
   NVIDIA_BASE_URL: z.string().default("https://integrate.api.nvidia.com/v1"),
   NVIDIA_OCR_MODEL: z.string().default("meta/llama-3.2-90b-vision-instruct"),
+  GEMINI_API_KEY: z.string().default(""),
+  GEMINI_BASE_URL: z.string().default("https://generativelanguage.googleapis.com/v1beta"),
+  GEMINI_OCR_MODEL: z.string().default("gemini-2.5-flash"),
+  OPENROUTER_API_KEY: z.string().default(""),
+  OPENROUTER_BASE_URL: z.string().default("https://openrouter.ai/api/v1"),
+  OPENROUTER_OCR_MODEL: z.string().default("google/gemini-2.5-flash"),
   UPLOAD_DIR: z.string().default("uploads"),
   JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
   JWT_REFRESH_SECRET: z.string().min(1, "JWT_REFRESH_SECRET is required"),
@@ -18,7 +24,7 @@ const envSchema = z.object({
   GROQ_OCR_MODEL: z.string().default("qwen/qwen3.6-27b"),
   OPENAI_API_KEY: z.string().default(""),
   OPENAI_OCR_MODEL: z.string().default("gpt-4o"),
-  OCR_PROVIDER: z.enum(["auto", "nvidia", "openai", "groq"]).default("auto"),
+  OCR_PROVIDER: z.enum(["auto", "gemini", "openrouter", "nvidia", "openai", "groq"]).default("auto"),
   OCR_TIMEOUT_MS: z.coerce.number().int().min(5000).max(120000).default(60000),
 });
 
@@ -42,6 +48,12 @@ export const ELEVENLABS_BASE_URL = "https://api.elevenlabs.io/v1";
 export const NVIDIA_API_KEY = env.NVIDIA_API_KEY;
 export const NVIDIA_BASE_URL = env.NVIDIA_BASE_URL;
 export const NVIDIA_OCR_MODEL = env.NVIDIA_OCR_MODEL;
+export const GEMINI_API_KEY = env.GEMINI_API_KEY;
+export const GEMINI_BASE_URL = env.GEMINI_BASE_URL;
+export const GEMINI_OCR_MODEL = env.GEMINI_OCR_MODEL;
+export const OPENROUTER_API_KEY = env.OPENROUTER_API_KEY;
+export const OPENROUTER_BASE_URL = env.OPENROUTER_BASE_URL;
+export const OPENROUTER_OCR_MODEL = env.OPENROUTER_OCR_MODEL;
 export const UPLOAD_DIR = env.UPLOAD_DIR;
 export const JWT_SECRET = env.JWT_SECRET;
 export const JWT_REFRESH_SECRET = env.JWT_REFRESH_SECRET;
