@@ -11,10 +11,11 @@ import mqtt, { type MqttClient } from "mqtt";
  *   pillbox/{deviceId}/request    web  -> server  {type:"getSchedule"}
  *   pillbox/{deviceId}/dose       board-> web+server {type:"dose", medicationId}
  *   pillbox/{deviceId}/status     board-> web     {type:"status", online, lastSeen, ...}
- *   pillbox/{deviceId}/telemetry  board-> web     {type:"telemetry", ultrasonic, motors, buzzer}
+  *   pillbox/{deviceId}/telemetry board-> web     {type:"telemetry", ultrasonic, motors, buzzer}
+ *   pillbox/{deviceId}/event      board-> web     lifecycle and safety events
  *
  * Exposes the same `hardwareClient` interface the UI already uses
- * (connect / fireReminder / refreshSchedule / onDose / onStatus / onTelemetry / sim).
+ * (connect / fireReminder / refreshSchedule / onDose / onStatus / onTelemetry / onEvent / sim).
  */
 
 const DEFAULT_DEVICE_ID = "pillbox-01";
@@ -40,15 +41,32 @@ const MQTT_WS_URL =
 type DoseHandler = (medicationId: string) => void;
 type StatusHandler = (online: boolean) => void;
 type TelemetryHandler = (data: TelemetryData) => void;
+type EventHandler = (data: DeviceEvent) => void;
 
 export interface Esp32Med {
   medicationId: string;
   name: string;
+  dosage?: string;
+  timesOfDay?: string[];
+  quantityPerDose?: number;
   slot: number;
+}
+
+export interface DeviceEvent {
+  type: string;
+  state?: string;
+  medicationId?: string;
+  occurrenceId?: string;
+  quantity?: number;
+  quantityDispensed?: number;
+  sensorActive?: boolean;
+  reason?: string;
 }
 
 export interface TelemetryData {
   timestamp: number;
+  state?: string;
+  sensorActive?: boolean;
   ultrasonic: {
     distance: number;
     handDetected: boolean;
@@ -86,6 +104,7 @@ class MqttHardwareClient {
   private doseHandlers = new Set<DoseHandler>();
   private statusHandlers = new Set<StatusHandler>();
   private telemetryHandlers = new Set<TelemetryHandler>();
+  private eventHandlers = new Set<EventHandler>();
   private latestTelemetry: TelemetryData | null = null;
   private latestStatus: DeviceStatus | null = null;
 
@@ -139,6 +158,20 @@ class MqttHardwareClient {
         this.doseHandlers.forEach((h) => h(String(msg.medicationId)));
       }
 
+      // ---- DEVICE EVENT ----
+      else if (topic.endsWith("/event")) {
+        this.eventHandlers.forEach((h) => h({
+          type: String(msg.type || "unknown"),
+          state: msg.state,
+          medicationId: msg.medicationId,
+          occurrenceId: msg.occurrenceId,
+          quantity: msg.quantity,
+          quantityDispensed: msg.quantityDispensed,
+          sensorActive: msg.sensorActive,
+          reason: msg.reason,
+        }));
+      }
+
       // ---- STATUS UPDATE ----
       else if (topic.endsWith("/status")) {
         const lastSeen = msg.lastSeen ? Number(msg.lastSeen) : Math.floor(Date.now() / 1000);
@@ -159,6 +192,8 @@ class MqttHardwareClient {
       else if (topic.endsWith("/telemetry")) {
         this.latestTelemetry = {
           timestamp: msg.timestamp ?? Date.now(),
+          state: msg.state,
+          sensorActive: msg.sensorActive ?? false,
           ultrasonic: {
             distance: msg.ultrasonic?.distance ?? 0,
             handDetected: msg.ultrasonic?.handDetected ?? false,
@@ -186,6 +221,7 @@ class MqttHardwareClient {
     this.client?.subscribe(`pillbox/${this.deviceId}/dose`);
     this.client?.subscribe(`pillbox/${this.deviceId}/status`);
     this.client?.subscribe(`pillbox/${this.deviceId}/telemetry`);
+    this.client?.subscribe(`pillbox/${this.deviceId}/event`);
   }
 
   disconnect(): void {
@@ -195,7 +231,7 @@ class MqttHardwareClient {
   }
 
   /** Fire a dose-time: tell the board to dispense. */
-  fireReminder(medicationId: string, text: string, _voiceId?: string | null): void {
+  fireReminder(medicationId: string, text: string, _voiceId?: string | null, quantityPerDose: number = 1): void {
     if (this.sim) {
       // No real board: simulate a drop shortly after the reminder.
       setTimeout(() => this.simulateDose(medicationId), 1500);
@@ -207,7 +243,7 @@ class MqttHardwareClient {
     }
     this.client!.publish(
       `pillbox/${this.deviceId}/cmd`,
-      JSON.stringify({ action: "dispense", medicationId, text }),
+      JSON.stringify({ action: "dispense", medicationId, text, quantityPerDose }),
       { qos: 1 },
     );
   }
@@ -316,6 +352,11 @@ class MqttHardwareClient {
   onTelemetry(handler: TelemetryHandler): () => void {
     this.telemetryHandlers.add(handler);
     return () => this.telemetryHandlers.delete(handler);
+  }
+
+  onEvent(handler: EventHandler): () => void {
+    this.eventHandlers.add(handler);
+    return () => this.eventHandlers.delete(handler);
   }
 
   private emitStatus(online: boolean): void {

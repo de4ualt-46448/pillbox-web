@@ -114,10 +114,7 @@ the Railway-generated domain once the deploy turns green.
 
 ### 4. Point the ESP32 at the same broker
 
-The firmware now defaults to `MQTT_DEPLOY`, with `broker.hivemq.com` on port
-`1883`, matching the server's functional-testing URL. Before flashing, edit
-`WIFI_SSID`, `WIFI_PASS`, and `DEVICE_ID`. The board and server must use the
-same device ID and topic family.
+The firmware connects directly to the MQTT broker on `broker.hivemq.com:1883` for functional testing. Before flashing, edit `WIFI_SSID`, `WIFI_PASS`, `TIMEZONE_INFO`, and `DEVICE_ID`. The board and server must use the same device ID, timezone, schedule, and topic family. The ultrasonic sensor is off while idle, activates at the scheduled pill time, triggers on a stable hand reading at `<= 5 cm`, and stops immediately after the configured dosage sequence completes.
 
 > The `hardware-bridge` workspace is **not deployed** — it is a local LAN
 > helper for development only.
@@ -154,33 +151,32 @@ pillbox-web/
 | Topic | Direction | Purpose |
 |-------|-----------|---------|
 | `pillbox/{id}/cmd` | Web → ESP32 | Dispense, schedule, servo, buzzer commands |
-| `pillbox/{id}/dose` | ESP32 → Web | Pill dispensed confirmation |
-| `pillbox/{id}/status` | ESP32 → Web+Server | Device online status |
-| `pillbox/{id}/telemetry` | ESP32 → Web | Sensor data (ultrasonic, motors) |
-| `pillbox/{id}/request` | ESP32 → Server | Schedule request |
+| `pillbox/{id}/dose` | ESP32 → Web+Server | Confirmed dosage event; server records it idempotently |
+| `pillbox/{id}/event` | ESP32 → Web+Server | Pill-time, dispensing, completed, missed, or rejected state |
+| `pillbox/{id}/status` | ESP32 → Web+Server | Device online and sensor state |
+| `pillbox/{id}/telemetry` | ESP32 → Web+Server | Sensor and actuator telemetry |
+| `pillbox/{id}/request` | ESP32 → Server | Schedule synchronization request |
 
-## Hardware Pinout
+## Hardware Pinout — active firmware profile
 
 | Component | ESP32 Pin |
 |-----------|-----------|
-| Stepper IN1 | GPIO 19 |
-| Stepper IN2 | GPIO 22 |
-| Stepper IN3 | GPIO 21 |
-| Stepper IN4 | GPIO 23 |
-| Servo Signal | GPIO 13 |
-| Ultrasonic Trig | GPIO 5 |
-| Ultrasonic Echo | GPIO 18 |
-| Buzzer (MOSFET) | GPIO 4 |
+| Servo signal | GPIO 23 |
+| HC-SR04 TRIG | GPIO 18 |
+| HC-SR04 ECHO | GPIO 19, through a 5 V-to-3.3 V divider |
+| Buzzer control | GPIO 4 |
+
+The current firmware is servo-plus-ultrasonic. The older stepper/IR-break-beam pinout is not applicable to `esp32/firmware/firmware.ino`.
 
 ## Features
 
-- **Real-time dispensing** via MQTT commands
-- **Sensor monitoring** (ultrasonic distance, hand detection)
-- **Motor control** (stepper carousel, servo trapdoor)
-- **Audio alerts** (buzzer patterns)
-- **Stock management** (automatic pill count updates)
-- **Push notifications** (dose reminders)
-- **Simulated mode** (test without hardware)
+- **Scheduled dispensing workflow** driven by the website medication schedule
+- **5 cm hand detection** only during an active pill-time window
+- **Automatic sensor shutdown** after the configured dosage sequence
+- **MQTT status, telemetry, dose, and lifecycle events**
+- **Website dosage synchronization** through `quantityPerDose`
+- **Idempotent stock management** for repeated MQTT deliveries
+- **Push notifications and simulated mode** for testing without hardware
 
 ## Documentation
 

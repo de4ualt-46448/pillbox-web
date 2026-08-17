@@ -59,6 +59,7 @@ model DoseLog {
   medicationId  String
   quantity      Int      @default(1)
   source        String   @default("manual") // manual | hardware | simulated
+  hardwareEventId String? @unique // idempotency key for confirmed ESP32 dose events
   takenAt       DateTime @default(now())
   medication    Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
 

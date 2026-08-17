@@ -67,6 +67,14 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
         push("info", `Hand detected at ${data.ultrasonic.distance.toFixed(1)}cm`);
       }
     });
+    const offEvent = hardwareClient.onEvent((event) => {
+      const med = medications.find((m) => m.id === event.medicationId);
+      const name = med?.name ?? event.medicationId ?? "medication";
+      if (event.type === "pill_time") push("reminder", `Pill time started: ${name}; hand sensor active`);
+      else if (event.type === "completed") push("dose", `Dispensed ${event.quantity ?? event.quantityDispensed ?? 1} dose unit(s) of ${name}; sensor off`);
+      else if (event.type === "missed") push("error", `Missed dose: ${name}`);
+      else if (event.type === "rejected") push("error", `Device rejected ${name}: ${event.reason ?? "unknown reason"}`);
+    });
     // Poll server for ESP32 device data (real board telemetry)
     let pollTimer: ReturnType<typeof setInterval>;
     async function pollDevice() {
@@ -93,6 +101,7 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
       offStatus();
       offDose();
       offTelemetry();
+      offEvent();
       clearInterval(pollTimer);
     };
   }, [open, medications, push]);
@@ -111,10 +120,10 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
     const text = `It's time to take your ${med.name}, ${med.dosage}.`;
     // Try MQTT first, fall back to REST
     if (hardwareClient.isConnected()) {
-      hardwareClient.fireReminder(med.id, text, defaultVoice?.remoteVoiceId);
+      hardwareClient.fireReminder(med.id, text, defaultVoice?.remoteVoiceId, med.quantityPerDose);
       push("reminder", `Dispense sent for ${med.name} → board`);
     } else {
-      api.post("/hardware/devices/pillbox-01/dispense", { medicationId: med.id, text })
+      api.post("/hardware/devices/pillbox-01/dispense", { medicationId: med.id, text, quantityPerDose: med.quantityPerDose })
         .then(() => push("reminder", `Dispense sent for ${med.name} → board (REST)`))
         .catch((e) => push("error", (e as Error).message));
     }
@@ -211,6 +220,12 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
                 <span className="text-textSecondary">Distance</span>
                 <div className="font-semibold text-textPrimary">
                   {telemetry.ultrasonic.distance.toFixed(1)} cm
+                </div>
+              </div>
+              <div className="bg-softSurfaceHighlight p-2 rounded-lg">
+                <span className="text-textSecondary">Sensor</span>
+                <div className={`font-semibold ${telemetry.sensorActive ? "text-mintGreen" : "text-textSecondary"}`}>
+                  {telemetry.sensorActive ? "Active at pill time" : "Off"}
                 </div>
               </div>
               <div className="bg-softSurfaceHighlight p-2 rounded-lg">

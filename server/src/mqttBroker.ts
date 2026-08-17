@@ -99,6 +99,7 @@ function connectClient(brokerUrl: string): void {
     client.subscribe("pillbox/+/request");
     client.subscribe("pillbox/+/status");
     client.subscribe("pillbox/+/telemetry");
+    client.subscribe("pillbox/+/event");
     console.log(`[mqtt] server subscriber connected to ${brokerUrl}`);
   });
 
@@ -129,44 +130,85 @@ function connectClient(brokerUrl: string): void {
 
       // ---- DOSE EVENT ----
       if (topic.endsWith("/dose")) {
-        const medId = String(msg.medicationId);
+        if (msg.confirmed === false) return;
+        const medId = String(msg.medicationId || "");
+        if (!medId) return;
         const med = await prisma.medication.findUnique({ where: { id: medId } });
         if (!med) return;
         const quantity =
-          msg.quantity && Number(msg.quantity) > 0 ? Number(msg.quantity) : med.quantityPerDose;
-        const [updated] = await prisma.$transaction([
-          prisma.medication.update({
-            where: { id: med.id },
-            data: { pillsRemaining: Math.max(med.pillsRemaining - quantity, 0) },
-          }),
-          prisma.doseLog.create({
-            data: { medicationId: med.id, quantity, source: "hardware" },
-          }),
-        ]);
-        if (med.userId) {
-          sendPushToUser(med.userId, {
-            title: "Dose recorded",
-            body: `${med.name} dispensed`,
-            medicationId: med.id,
-          }).catch(() => {});
+          msg.quantity && Number(msg.quantity) > 0 ? Math.min(Number(msg.quantity), 100) : med.quantityPerDose;
+        const hardwareEventId = [msg.occurrenceId, msg.commandId].filter(Boolean).join("|") || null;
+
+        if (hardwareEventId) {
+          const existing = await prisma.doseLog.findUnique({ where: { hardwareEventId } });
+          if (existing) {
+            console.log(`[mqtt] duplicate dose ignored ${hardwareEventId}`);
+            return;
+          }
         }
-        console.log(`[mqtt] dose recorded ${medId}, remaining ${updated.pillsRemaining}`);
+
+        try {
+          const [updated] = await prisma.$transaction([
+            prisma.medication.update({
+              where: { id: med.id },
+              data: { pillsRemaining: Math.max(med.pillsRemaining - quantity, 0) },
+            }),
+            prisma.doseLog.create({
+              data: {
+                medicationId: med.id,
+                quantity,
+                source: "hardware",
+                hardwareEventId,
+              },
+            }),
+          ]);
+          if (med.userId) {
+            sendPushToUser(med.userId, {
+              title: "Dose recorded",
+              body: `${med.name} dispensed`,
+              medicationId: med.id,
+            }).catch(() => {});
+          }
+          console.log(`[mqtt] dose recorded ${medId} x${quantity}, remaining ${updated.pillsRemaining}`);
+        } catch (error) {
+          // A concurrent duplicate can race the pre-check; the unique index makes
+          // the second write fail safely without a second stock decrement.
+          if ((error as { code?: string }).code === "P2002" && hardwareEventId) {
+            console.log(`[mqtt] concurrent duplicate dose ignored ${hardwareEventId}`);
+            return;
+          }
+          throw error;
+        }
       }
 
       // ---- SCHEDULE REQUEST ----
       else if (topic.endsWith("/request")) {
-        // Answer a schedule request with the current medication table.
+        // Answer with the website's authoritative medication schedule and dose quantity.
         const meds = await prisma.medication.findMany({ orderBy: { name: "asc" } });
+        const latestUpdate = meds.reduce(
+          (latest, medication) => Math.max(latest, medication.updatedAt.getTime()),
+          0,
+        );
         const schedulePayload = JSON.stringify({
           action: "schedule",
-          meds: meds.map((m) => ({
+          scheduleVersion: `${latestUpdate}:${meds.length}`,
+          timezone: process.env.TZ || "UTC",
+          meds: meds.map((m, index) => ({
             medicationId: m.id,
             name: m.name,
-            slot: 0,
+            dosage: m.dosage,
+            timesOfDay: m.timesOfDay.split(",").map((time) => time.trim()).filter(Boolean),
+            quantityPerDose: m.quantityPerDose,
+            slot: index,
           })),
         });
         client.publish(`pillbox/${deviceId}/cmd`, schedulePayload, { qos: 1, retain: true });
-        console.log(`[mqtt] published schedule to pillbox/${deviceId}/cmd`);
+        console.log(`[mqtt] published ${meds.length}-medication schedule to pillbox/${deviceId}/cmd`);
+      }
+
+      // ---- DEVICE EVENT ----
+      else if (topic.endsWith("/event")) {
+        console.log(`[mqtt] device event from ${deviceId}: ${msg.type || "unknown"}`);
       }
 
       // ---- STATUS UPDATE ----
