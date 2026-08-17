@@ -61,21 +61,22 @@ WebServer httpServer(80);
 // Set MQTT_HOST to your computer's local IP (e.g. 192.168.1.x).
 // Find it: Windows → ipconfig, macOS → ifconfig, Linux → hostname -I.
 //
-#define MQTT_LOCAL
+// #define MQTT_LOCAL
 #ifdef MQTT_LOCAL
 const char* MQTT_HOST   = "192.168.1.5";   // <-- CHANGE to your computer's LAN IP
 const uint16_t MQTT_PORT = 1883;            // local aedes broker
 #endif
 //
-// --- DEPLOYMENT (server uses an external broker like HiveMQ) ---
-// The server's MQTT_BROKER_URL env var must point to the same broker.
-// No credentials needed for HiveMQ public broker.
+// --- DEPLOYMENT (server uses the same external broker) ---
+// The server's MQTT_BROKER_URL must point to the same broker and port.
+// This public broker configuration is for functional testing only. For a
+// real pillbox, use an authenticated private broker and TLS on the device.
 //
-// #define MQTT_DEPLOY
-// #ifdef MQTT_DEPLOY
-// const char* MQTT_HOST   = "broker.hivemq.com";
-// const uint16_t MQTT_PORT = 1883;
-// #endif
+#define MQTT_DEPLOY
+#ifdef MQTT_DEPLOY
+const char* MQTT_HOST   = "broker.hivemq.com";
+const uint16_t MQTT_PORT = 1883;
+#endif
 
 const char* DEVICE_ID    = "pillbox-01";
 

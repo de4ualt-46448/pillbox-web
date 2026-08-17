@@ -11,7 +11,7 @@ const envSchema = z.object({
   UPLOAD_DIR: z.string().default("uploads"),
   JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
   JWT_REFRESH_SECRET: z.string().min(1, "JWT_REFRESH_SECRET is required"),
-  DATABASE_URL: z.string().default("file:./dev.db"),
+  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   MQTT_BROKER_URL: z.string().optional(),
   GROQ_API_KEY: z.string().default(""),
   OPENAI_API_KEY: z.string().default(""),

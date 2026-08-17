@@ -18,7 +18,7 @@ Complete IoT solution connecting ESP32 hardware to a web application via MQTT fo
 │         ▼                       ▼                       ▼          │
 │  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐     │
 │  │   Server     │      │  Database    │      │  Hardware    │     │
-│  │  (Express)   │      │  (SQLite)    │      │              │     │
+│  │  (Express)   │      │ (PostgreSQL) │      │              │     │
 │  └──────────────┘      └──────────────┘      │ • Stepper    │     │
 │                                               │ • Servo      │     │
 │                                               │ • Ultrasonic │     │
@@ -65,9 +65,9 @@ npm run dev
 ## Deploy to Railway
 
 The app deploys as **one Node service** (serving the Express API *and* the built
-React client) plus **one PostgreSQL database**. MQTT runs over the public HiveMQ
-broker so the deployed server and the ESP32 work together from **any network**
-(not just localhost/LAN).
+React client) plus **one PostgreSQL database**. The server and ESP32 use MQTT
+TCP, while the browser uses MQTT over secure WebSockets. This lets the deployed
+server, website, and ESP32 work together from different networks.
 
 ### 1. Create the project
 
@@ -85,32 +85,40 @@ On the Node service, go to **Variables** and set (see `.env.example`):
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference the Postgres service) |
 | `JWT_SECRET` | a long random string (`openssl rand -hex 32`) |
 | `JWT_REFRESH_SECRET` | a different long random string |
-| `MQTT_BROKER_URL` | `mqtt://broker.hivemq.com:1883` |
+| `MQTT_BROKER_URL` | `mqtt://broker.hivemq.com:1883` for functional testing |
 | `NODE_ENV` | `production` |
 
-Optional: `CLIENT_ORIGIN`, `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (for web
-push), and any AI API keys (`ELEVENLABS_API_KEY`, `NVIDIA_API_KEY`, etc.).
+The browser automatically uses `wss://broker.hivemq.com:8884/mqtt` on the
+HTTPS deployment unless `VITE_MQTT_WS_URL` overrides it. Optional variables
+include `CLIENT_ORIGIN`, `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (for web
+push), and AI API keys such as `ELEVENLABS_API_KEY` or `NVIDIA_API_KEY`.
+
+> The public HiveMQ broker is unauthenticated and shared. It is suitable only
+> for testing. For a real pillbox, replace both MQTT URLs with an authenticated
+> private broker, enable TLS for the ESP32, and restrict each device to its own
+> `pillbox/{deviceId}/...` topics.
 
 ### 3. Deploy
 
 Railway runs `railway.json` automatically:
 
-- **Build** — installs deps, builds the client (`vite build` → `client/dist`),
-  runs `prisma generate`.
-- **Start** — applies the schema (`prisma db push`) then boots the server via
-  `tsx`. Health is checked on `/api/health`.
+- **Build** — installs dependencies, builds the client (`vite build` →
+  `client/dist`), and runs `prisma generate`.
+- **Start** — applies the PostgreSQL schema (`prisma db push`) and boots the
+  server via `tsx`. Health is checked on `/api/health`.
 
 The server serves the client at its root URL, so the web app is available at
 the Railway-generated domain once the deploy turns green.
 
 ### 4. Point the ESP32 at the same broker
 
-So the board can reach the deployed server from any network, set the firmware's
-MQTT broker host to `broker.hivemq.com` (port `1883`). The board and the server
-then share the same public broker and exchange messages over the internet.
+The firmware now defaults to `MQTT_DEPLOY`, with `broker.hivemq.com` on port
+`1883`, matching the server's functional-testing URL. Before flashing, edit
+`WIFI_SSID`, `WIFI_PASS`, and `DEVICE_ID`. The board and server must use the
+same device ID and topic family.
 
-> The `hardware-bridge` workspace is **not** deployed — it's a local LAN helper
-> for development only.
+> The `hardware-bridge` workspace is **not deployed** — it is a local LAN
+> helper for development only.
 
 ## File Structure
 
@@ -145,7 +153,7 @@ pillbox-web/
 |-------|-----------|---------|
 | `pillbox/{id}/cmd` | Web → ESP32 | Dispense, schedule, servo, buzzer commands |
 | `pillbox/{id}/dose` | ESP32 → Web | Pill dispensed confirmation |
-| `pillbox/{id}/status` | ESP32 → Web | Device online status |
+| `pillbox/{id}/status` | ESP32 → Web+Server | Device online status |
 | `pillbox/{id}/telemetry` | ESP32 → Web | Sensor data (ultrasonic, motors) |
 | `pillbox/{id}/request` | ESP32 → Server | Schedule request |
 
