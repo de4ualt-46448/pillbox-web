@@ -5,7 +5,7 @@
     "buildCommand": "npm install --include=dev && npm run build -w client && npm install -w server && npm run prisma:generate -w server"
   },
   "deploy": {
-    "startCommand": "cd server && npx prisma db push --skip-generate && npx tsx src/index.ts",
+    "startCommand": "cd server && npx prisma db push --accept-data-loss --skip-generate && npx tsx src/index.ts",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
