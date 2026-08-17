@@ -1,4 +1,8 @@
-const NVIDIA_API_KEY = "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";
+const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY;
+if (!NVIDIA_API_KEY) {
+  console.error("Set NVIDIA_API_KEY before running this vision smoke test.");
+  process.exit(1);
+}
 const url = "https://ai.api.nvidia.com/v1/gr/meta/llama-3.2-90b-vision-instruct/chat/completions";
 
 const png =

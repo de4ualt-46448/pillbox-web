@@ -14,12 +14,16 @@ interface NvidiaParsed {
   totalQuantity?: number | null;
   quantityPerDose?: number | null;
   rawText?: string;
+  confidence?: Record<string, number | null>;
 }
 
 interface ReviewLocationState {
   rawText?: string;
   mode?: ScanMode;
   parsed?: NvidiaParsed | null;
+  warnings?: string[];
+  status?: "complete" | "needs_review";
+  provider?: string;
 }
 
 /**
@@ -40,6 +44,7 @@ export function ScanReview() {
   const rawText = state.rawText ?? "";
   const mode = (state.mode ?? "label") as ScanMode;
   const nvidiaParsed = state.parsed ?? null;
+  const warnings = state.warnings ?? [];
 
   const parsed: ParsedMedication = useMemo(() => {
     if (nvidiaParsed) {
@@ -111,6 +116,23 @@ export function ScanReview() {
           : "We pre-filled what we could read — please double-check before saving."}
       </p>
 
+      {warnings.length > 0 && (
+        <div className="rounded-2xl bg-warningAmber/20 px-4 py-3 text-sm text-textPrimary">
+          <p className="font-semibold">Please verify the highlighted details</p>
+          <ul className="mt-1 list-disc pl-5 text-textSecondary">
+            {warnings.map((warning) => <li key={warning}>{warning}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {rawText && (
+        <details className="neumorphic-card px-4 py-3 text-sm text-textSecondary">
+          <summary className="cursor-pointer font-semibold text-textPrimary">View OCR transcription</summary>
+          <p className="mt-2 whitespace-pre-wrap break-words">{rawText}</p>
+          {state.provider && <p className="mt-2 text-xs">Processed by {state.provider} vision OCR.</p>}
+        </details>
+      )}
+
       {mode === "prescription" && (
         <div
           className={`rounded-2xl px-4 py-3 flex items-center gap-2 ${
@@ -126,12 +148,12 @@ export function ScanReview() {
         </div>
       )}
 
-      <ReviewField label="Medication name" value={name} onChange={setName} detected={!!parsed.name} />
-      <ReviewField label="Dosage" value={dosage} onChange={setDosage} detected={!!parsed.dosage} />
-      <ReviewField label="Frequency" value={frequency} onChange={setFrequency} detected={!!parsed.frequency} />
+      <ReviewField label="Medication name" value={name} onChange={setName} detected={!!parsed.name} uncertain={isLowConfidence(nvidiaParsed?.confidence?.name)} />
+      <ReviewField label="Dosage" value={dosage} onChange={setDosage} detected={!!parsed.dosage} uncertain={isLowConfidence(nvidiaParsed?.confidence?.dosage)} />
+      <ReviewField label="Frequency" value={frequency} onChange={setFrequency} detected={!!parsed.frequency} uncertain={isLowConfidence(nvidiaParsed?.confidence?.frequency)} />
       <ReviewField label="Times (comma separated, HH:mm)" value={timesText} onChange={setTimesText} detected={parsed.timesOfDay.length > 0} />
-      <ReviewField label="Total pill quantity" value={quantityText} onChange={setQuantityText} detected={parsed.totalQuantity !== null} />
-      <ReviewField label="Pills per dose" value={pillsPerDoseText} onChange={setPillsPerDoseText} detected={parsed.quantityPerDose !== null} />
+      <ReviewField label="Total pill quantity" value={quantityText} onChange={setQuantityText} detected={parsed.totalQuantity !== null} uncertain={isLowConfidence(nvidiaParsed?.confidence?.totalQuantity)} />
+      <ReviewField label="Pills per dose" value={pillsPerDoseText} onChange={setPillsPerDoseText} detected={parsed.quantityPerDose !== null} uncertain={isLowConfidence(nvidiaParsed?.confidence?.quantityPerDose)} />
 
       {error && <p className="text-lowStockRed text-sm">{error}</p>}
 
@@ -158,24 +180,32 @@ export function ScanReview() {
   );
 }
 
+function isLowConfidence(value: number | null | undefined): boolean {
+  return typeof value === "number" && value < 0.7;
+}
+
 function ReviewField({
   label,
   value,
   onChange,
   detected,
+  uncertain,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   detected?: boolean;
+  uncertain?: boolean;
 }) {
   return (
     <label className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-textPrimary">{label}</span>
-        {detected && value && (
+        {uncertain && value ? (
+          <span className="text-xs text-warningAmber font-medium">Please verify</span>
+        ) : detected && value ? (
           <span className="text-xs text-forestGreen font-medium">Auto-detected</span>
-        )}
+        ) : null}
       </div>
       <input
         value={value}

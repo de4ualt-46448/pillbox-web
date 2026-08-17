@@ -14,7 +14,12 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   MQTT_BROKER_URL: z.string().optional(),
   GROQ_API_KEY: z.string().default(""),
+  GROQ_BASE_URL: z.string().default("https://api.groq.com/openai/v1"),
+  GROQ_OCR_MODEL: z.string().default("qwen/qwen3.6-27b"),
   OPENAI_API_KEY: z.string().default(""),
+  OPENAI_OCR_MODEL: z.string().default("gpt-4o"),
+  OCR_PROVIDER: z.enum(["auto", "nvidia", "openai", "groq"]).default("auto"),
+  OCR_TIMEOUT_MS: z.coerce.number().int().min(5000).max(120000).default(60000),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -42,4 +47,9 @@ export const JWT_SECRET = env.JWT_SECRET;
 export const JWT_REFRESH_SECRET = env.JWT_REFRESH_SECRET;
 export const MQTT_BROKER_URL = env.MQTT_BROKER_URL;
 export const GROQ_API_KEY = env.GROQ_API_KEY;
+export const GROQ_BASE_URL = env.GROQ_BASE_URL;
+export const GROQ_OCR_MODEL = env.GROQ_OCR_MODEL;
 export const OPENAI_API_KEY = env.OPENAI_API_KEY;
+export const OPENAI_OCR_MODEL = env.OPENAI_OCR_MODEL;
+export const OCR_PROVIDER = env.OCR_PROVIDER;
+export const OCR_TIMEOUT_MS = env.OCR_TIMEOUT_MS;

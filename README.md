@@ -87,11 +87,13 @@ On the Node service, go to **Variables** and set (see `.env.example`):
 | `JWT_REFRESH_SECRET` | a different long random string |
 | `MQTT_BROKER_URL` | `mqtt://broker.hivemq.com:1883` for functional testing |
 | `NODE_ENV` | `production` |
+| `OCR_PROVIDER` | `auto` (Groq Qwen, then NVIDIA, then OpenAI) or a fixed provider name |
+| `GROQ_API_KEY` / `NVIDIA_API_KEY` / `OPENAI_API_KEY` | Configure at least one provider key for medication OCR |
 
 The browser automatically uses `wss://broker.hivemq.com:8884/mqtt` on the
 HTTPS deployment unless `VITE_MQTT_WS_URL` overrides it. Optional variables
 include `CLIENT_ORIGIN`, `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (for web
-push), and AI API keys such as `ELEVENLABS_API_KEY` or `NVIDIA_API_KEY`.
+push), and AI API keys such as `ELEVENLABS_API_KEY` or `NVIDIA_API_KEY`. Medication OCR uses a vision-capable provider and returns structured fields with confidence warnings. The scanner preprocesses camera/gallery images, preserves the raw transcription, and always sends the result to an editable review screen before saving. Configure `GROQ_OCR_MODEL` (default `qwen/qwen3.6-27b`), `NVIDIA_OCR_MODEL`, or `OPENAI_OCR_MODEL` only when you need to override the documented defaults. Never commit provider keys to Git; the test utilities require their keys through environment variables.
 
 > The public HiveMQ broker is unauthenticated and shared. It is suitable only
 > for testing. For a real pillbox, replace both MQTT URLs with an authenticated

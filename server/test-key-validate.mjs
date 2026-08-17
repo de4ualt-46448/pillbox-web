@@ -1,4 +1,8 @@
-const NVIDIA_API_KEY = "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";
+const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY;
+if (!NVIDIA_API_KEY) {
+  console.error("Set NVIDIA_API_KEY before running this validation utility.");
+  process.exit(1);
+}
 
 const candidates = [
   "https://integrate.api.nvidia.com/v1/chat/completions",
