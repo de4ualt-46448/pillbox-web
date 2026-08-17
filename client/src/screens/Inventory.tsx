@@ -79,7 +79,7 @@ export function Inventory() {
             pushEnabled ? "bg-forestGreen justify-end" : "bg-textSecondary/30 justify-start"
           }`}
         >
-          <div className="w-5 h-5 rounded-full bg-white shadow" />
+          <div className="w-5 h-5 rounded-full bg-softSurfaceHighlight shadow" />
         </div>
       </button>
 

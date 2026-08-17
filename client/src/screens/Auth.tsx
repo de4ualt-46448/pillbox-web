@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../store/auth";
+import { useTheme } from "../store/theme";
 
 export function SignIn() {
   const { signin } = useAuth();
@@ -96,10 +97,23 @@ function AuthShell({
   subtitle: string;
   children: ReactNode;
 }) {
+  const { theme, toggleTheme } = useTheme();
+
   return (
     <div className="min-h-screen flex items-center justify-center px-5">
       <div className="neumorphic-card w-full max-w-sm p-7">
-        <div className="text-3xl mb-1">💊</div>
+        <div className="flex items-center justify-between mb-5">
+          <div className="text-3xl">💊</div>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="rounded-full px-2.5 py-1 text-xs font-medium text-textSecondary transition-colors hover:bg-softSurface hover:text-textPrimary"
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? "Light" : "Dark"}
+          </button>
+        </div>
         <h1 className="text-xl font-bold text-textPrimary">{title}</h1>
         <p className="text-textSecondary text-sm mb-6">{subtitle}</p>
         {children}

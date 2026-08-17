@@ -5,6 +5,7 @@ import { HardwarePanel } from "./HardwarePanel";
 import { useMedications } from "../lib/queries";
 import { useVoiceProfiles } from "../lib/queries";
 import { useAuth } from "../store/auth";
+import { useTheme } from "../store/theme";
 import { useReminders } from "../hooks/useReminders";
 import { hardwareClient } from "../lib/mqttClient";
 import { speakLocal, speakCloned, playRecording } from "../lib/tts";
@@ -13,6 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 export function Layout() {
   const navigate = useNavigate();
   const { user, signout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const qc = useQueryClient();
   const { data: medications = [] } = useMedications();
   const { data: voiceProfiles = [] } = useVoiceProfiles();
@@ -65,6 +67,14 @@ export function Layout() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={toggleTheme}
+              className="rounded-full px-2.5 py-1 text-xs font-medium text-textSecondary transition-colors hover:bg-softSurface hover:text-textPrimary"
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? "Light" : "Dark"}
+            </button>
             <button
               onClick={() => setHwOpen(true)}
               className="flex items-center gap-1.5 text-sm text-textSecondary hover:text-textPrimary"

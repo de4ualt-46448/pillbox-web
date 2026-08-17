@@ -2,8 +2,46 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Dark mode is the default. The light palette is enabled only when the user chooses it. */
 :root {
+  color-scheme: dark;
+  --color-mint-background: #0d1917;
+  --color-soft-surface: #172522;
+  --color-soft-surface-highlight: #1e302c;
+  --color-soft-shadow-dark: #09110f;
+  --color-soft-shadow-light: #263d37;
+  --color-forest-green: #5be0b5;
+  --color-sage-green: #8ac8b8;
+  --color-mint-green: #4ee2bf;
+  --color-teal-accent: #5cd4dd;
+  --color-pale-mint: #b1f2e3;
+  --color-text-primary: #effaf6;
+  --color-text-secondary: #a5bdb6;
+  --color-text-on-gradient: #08211c;
+  --color-low-stock-red: #ff8878;
+  --color-warning-amber: #f2c365;
+  --shadow-neumorphic: 8px 8px 16px var(--color-soft-shadow-dark), -8px -8px 16px var(--color-soft-shadow-light);
+  --shadow-neumorphic-sm: 4px 4px 8px var(--color-soft-shadow-dark), -4px -4px 8px var(--color-soft-shadow-light);
+  --shadow-neumorphic-inset: inset 4px 4px 8px var(--color-soft-shadow-dark), inset -4px -4px 8px var(--color-soft-shadow-light);
+}
+
+:root[data-theme="light"] {
   color-scheme: light;
+  --color-mint-background: #a9e5d8;
+  --color-soft-surface: #eff3f1;
+  --color-soft-surface-highlight: #ffffff;
+  --color-soft-shadow-dark: #d1d9d6;
+  --color-soft-shadow-light: #ffffff;
+  --color-forest-green: #1b7a5c;
+  --color-sage-green: #5fa793;
+  --color-mint-green: #3dd9b4;
+  --color-teal-accent: #2fb9c6;
+  --color-pale-mint: #b7ece0;
+  --color-text-primary: #1e2a28;
+  --color-text-secondary: #7c8b87;
+  --color-text-on-gradient: #ffffff;
+  --color-low-stock-red: #e5695a;
+  --color-warning-amber: #e8b34c;
 }
 
 html,
@@ -15,8 +53,18 @@ body,
 body {
   margin: 0;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: #a9e5d8; /* MintBackground canvas behind the "phone" */
+  background: var(--color-mint-background);
+  color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 180ms ease;
 }
 
 /* Reusable neumorphic surface treatments (ported from Theme.kt). */
