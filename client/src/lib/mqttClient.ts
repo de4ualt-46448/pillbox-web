@@ -243,7 +243,13 @@ class MqttHardwareClient {
     }
     this.client!.publish(
       `pillbox/${this.deviceId}/cmd`,
-      JSON.stringify({ action: "dispense", medicationId, text, quantityPerDose }),
+      JSON.stringify({
+        action: "dispense",
+        medicationId,
+        text,
+        quantityPerDose,
+        commandId: `web-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      }),
       { qos: 1 },
     );
   }
@@ -257,7 +263,14 @@ class MqttHardwareClient {
     if (!this.isConnected()) return;
     this.client!.publish(
       `pillbox/${this.deviceId}/cmd`,
-      JSON.stringify({ action: "dispense", medicationId, slot, steps, quantity }),
+      JSON.stringify({
+        action: "dispense",
+        medicationId,
+        slot,
+        steps,
+        quantity,
+        commandId: `web-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      }),
       { qos: 1 },
     );
   }

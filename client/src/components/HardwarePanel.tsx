@@ -351,11 +351,11 @@ export function HardwarePanel({ open, onClose, medications, voiceProfiles }: Pro
         </div>
 
         <p className="text-xs text-textSecondary mt-4 leading-relaxed">
-          To connect a real Z Care ESP32: flash <code>esp32/firmware/firmware.ino</code>, then
-          configure your Wi-Fi credentials and MQTT broker in the firmware's top section.
-          For local dev, set <code>MQTT_HOST</code> to your computer's LAN IP.
-          For deployment, switch to <code>MQTT_DEPLOY</code> and set the server's
-          <code>MQTT_BROKER_URL</code> to the same broker.
+          To connect a real Z Care ESP32: flash <code>esp32/firmware/firmware.ino</code> or the
+          single-angle MQTT variant at <code>esp32/firmware-single-angle/firmware.ino</code>, then
+          configure Wi-Fi and the broker in the firmware's top section. The deployed server uses
+          <code>MQTT_BROKER_URL</code>; the browser uses <code>VITE_MQTT_WS_URL</code> for the same
+          broker's WebSocket endpoint. See <code>docs/SINGLE_ANGLE_MQTT.md</code> for the exact setup.
         </p>
       </div>
     </div>

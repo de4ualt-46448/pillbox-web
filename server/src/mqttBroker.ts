@@ -137,7 +137,7 @@ function connectClient(brokerUrl: string): void {
         if (!med) return;
         const quantity =
           msg.quantity && Number(msg.quantity) > 0 ? Math.min(Number(msg.quantity), 100) : med.quantityPerDose;
-        const hardwareEventId = [msg.occurrenceId, msg.commandId].filter(Boolean).join("|") || null;
+        const hardwareEventId = [msg.occurrenceId, msg.commandId, msg.eventId].filter(Boolean).join("|") || null;
 
         if (hardwareEventId) {
           const existing = await prisma.doseLog.findUnique({ where: { hardwareEventId } });
