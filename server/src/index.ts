@@ -8,15 +8,12 @@ import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PORT, HOST, WS_PATH, CLIENT_ORIGIN } from "./config.js";
+import { PORT, HOST, CLIENT_ORIGIN } from "./config.js";
 import { authRouter } from "./routes/auth.js";
 import { medicationRouter } from "./routes/medications.js";
 import { voiceRouter } from "./routes/voice.js";
 import { pushRouter } from "./routes/push.js";
 import { scanRouter } from "./routes/scan.js";
-import { hardwareRouter } from "./routes/hardware.js";
-import { attachHardwareWs } from "./hardwareWs.js";
-import { startMqttBroker } from "./mqttBroker.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -62,7 +59,6 @@ app.use("/api/medications", medicationRouter);
 app.use("/api/voice", voiceRouter);
 app.use("/api/push", pushRouter);
 app.use("/api/scan", scanRouter);
-app.use("/api/hardware", hardwareRouter);
 
 // Serve the built client in production (optional).
 const clientDist = path.resolve(__dirname, "../../client/dist");
@@ -78,8 +74,6 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 const server = createServer(app);
-attachHardwareWs(server);
-startMqttBroker();
 
 // Graceful shutdown
 function shutdown(signal: string) {
@@ -100,5 +94,4 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 
 server.listen(PORT, HOST, () => {
   console.log(`[server] listening on http://${HOST}:${PORT}`);
-  console.log(`[server] hardware WS at ws://${HOST}:${PORT}${WS_PATH}`);
 });

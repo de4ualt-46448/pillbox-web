@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import { BottomNav } from "../components/BottomNav";
-import { HardwarePanel } from "./HardwarePanel";
 import { useMedications } from "../lib/queries";
 import { useVoiceProfiles } from "../lib/queries";
 import { useAuth } from "../store/auth";
 import { useTheme } from "../store/theme";
 import { useReminders } from "../hooks/useReminders";
-import { hardwareClient } from "../lib/mqttClient";
 import { speakLocal, speakCloned, playRecording } from "../lib/tts";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -18,22 +16,6 @@ export function Layout() {
   const qc = useQueryClient();
   const { data: medications = [] } = useMedications();
   const { data: voiceProfiles = [] } = useVoiceProfiles();
-  const [hwOnline, setHwOnline] = useState(false);
-  const [hwOpen, setHwOpen] = useState(false);
-
-  useEffect(() => {
-    hardwareClient.connect();
-    const offStatus = hardwareClient.onStatus((online) => {
-      setHwOnline(online);
-      if (online) hardwareClient.refreshSchedule();
-    });
-    const offDose = hardwareClient.onDose(() => qc.invalidateQueries({ queryKey: ["medications"] }));
-    return () => {
-      offStatus();
-      offDose();
-      hardwareClient.disconnect();
-    };
-  }, [qc]);
 
   useReminders({
     enabled: true,
@@ -49,9 +31,6 @@ export function Layout() {
       } else {
         speakLocal(text, voice?.localeTag);
       }
-      if (hardwareClient.isConnected()) {
-        hardwareClient.fireReminder(med.id, text, voice?.remoteVoiceId);
-      }
     },
   });
 
@@ -66,35 +45,25 @@ export function Layout() {
               {user?.email}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={toggleTheme}
-              className="rounded-full px-2.5 py-1 text-xs font-medium text-textSecondary transition-colors hover:bg-softSurface hover:text-textPrimary"
-              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            >
-              {theme === "dark" ? "Light" : "Dark"}
-            </button>
-            <button
-              onClick={() => setHwOpen(true)}
-              className="flex items-center gap-1.5 text-sm text-textSecondary hover:text-textPrimary"
-              title="Pillbox hardware"
-            >
-              <span
-                className={`w-2.5 h-2.5 rounded-full ${hwOnline ? "bg-mintGreen" : "bg-textSecondary"}`}
-              />
-              Hardware
-            </button>
-            <button
-              onClick={async () => {
-                await signout();
-                navigate("/signin");
-              }}
-              className="text-sm text-textSecondary hover:text-textPrimary"
-            >
-              Sign out
-            </button>
-          </div>
+<div className="flex items-center gap-2">
+              <button
+                onClick={toggleTheme}
+                className="rounded-full px-2.5 py-1 text-xs font-medium text-textSecondary transition-colors hover:bg-softSurface hover:text-textPrimary"
+                title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              >
+                {theme === "dark" ? "Light" : "Dark"}
+              </button>
+              <button
+                onClick={async () => {
+                  await signout();
+                  navigate("/signin");
+                }}
+                className="text-sm text-textSecondary hover:text-textPrimary"
+              >
+                Sign out
+              </button>
+            </div>
         </header>
 
         <main className="flex-1 px-5 pb-28">
@@ -103,13 +72,6 @@ export function Layout() {
 
         <BottomNav />
       </div>
-
-      <HardwarePanel
-        open={hwOpen}
-        onClose={() => setHwOpen(false)}
-        medications={medications}
-        voiceProfiles={voiceProfiles}
-      />
     </div>
   );
 }

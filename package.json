@@ -2,17 +2,15 @@
   "name": "pillbox-web",
   "version": "1.0.0",
   "private": true,
-  "description": "Smart Pillbox — no-build vanilla HTML/CSS/JS SPA client, Express + Prisma server, ESP32 hardware bridge.",
+  "description": "Smart Pillbox — no-build vanilla HTML/CSS/JS SPA client, Express + Prisma server.",
   "workspaces": [
     "client",
-    "server",
-    "hardware-bridge"
+    "server"
   ],
   "scripts": {
     "install:all": "npm install",
     "dev": "npm run dev -w server",
     "dev:server": "npm run dev -w server",
-    "dev:bridge": "npm run dev -w hardware-bridge",
     "build": "npm run build --workspaces --if-present",
     "prisma:generate": "npm run prisma:generate -w server",
     "prisma:migrate": "npm run prisma:migrate -w server",
@@ -25,7 +23,9 @@
     "esbuild@0.28.1": true,
     "esbuild@0.21.5": true,
     "prisma@5.22.0": true,
-    "tesseract.js@5.1.1": true
+    "tesseract.js@5.1.1": true,
+    "netlify-cli@27.0.1": true,
+    "sharp@0.34.5": true
   },
   "main": "index.js",
   "keywords": [],

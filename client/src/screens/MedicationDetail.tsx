@@ -229,8 +229,7 @@ export function MedicationDetail() {
                   −{log.quantity} pill{log.quantity > 1 ? "s" : ""}
                 </span>
                 <span className="text-textSecondary">
-                  {log.source === "hardware" ? "📦" : log.source === "simulated" ? "🧪" : "👤"}{" "}
-                  {new Date(log.takenAt).toLocaleString()}
+                  👤 {new Date(log.takenAt).toLocaleString()}
                 </span>
               </div>
             ))}

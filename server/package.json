@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "aedes": "^0.51.3",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -22,10 +21,8 @@
     "express-validator": "^7.3.2",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
-    "mqtt": "^5.10.1",
     "multer": "^2.2.0",
     "web-push": "^3.6.7",
-    "ws": "^8.18.0",
     "zod": "^3.23.8",
     "prisma": "^5.22.0",
     "tsx": "^4.19.2"
@@ -38,7 +35,6 @@
     "@types/jsonwebtoken": "^9.0.7",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.10.0",
-    "@types/ws": "^8.5.13",
     "typescript": "^5.7.2"
   }
 }

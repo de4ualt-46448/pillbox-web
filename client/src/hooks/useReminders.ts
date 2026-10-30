@@ -5,7 +5,7 @@ interface ReminderOptions {
   enabled: boolean;
   medications: Medication[];
   voiceProfiles: VoiceProfile[];
-  /** Called when a dose time is reached — play audio / stream to hardware. */
+  /** Called when a dose time is reached — play audio notification. */
   onFire: (medication: Medication, voice: VoiceProfile | null) => void;
 }
 

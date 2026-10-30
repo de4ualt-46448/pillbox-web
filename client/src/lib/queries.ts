@@ -1,6 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import { hardwareClient } from "./mqttClient";
 import type { Medication, VoiceProfile, DoseLogEntry } from "../types";
 
 export const medKeys = {
@@ -19,7 +18,7 @@ export function useCreateMedication() {
   return useMutation({
     mutationFn: (input: Partial<Medication> & { timesOfDay?: string[]; totalQuantity: number }) =>
       api.post<Medication>("/medications", input),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); hardwareClient.refreshSchedule(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); },
   });
 }
 
@@ -28,7 +27,7 @@ export function useUpdateMedication() {
   return useMutation({
     mutationFn: ({ id, ...patch }: { id: string } & Record<string, unknown>) =>
       api.patch<Medication>(`/medications/${id}`, patch),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); hardwareClient.refreshSchedule(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); },
   });
 }
 
@@ -36,7 +35,7 @@ export function useDeleteMedication() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.del(`/medications/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); hardwareClient.refreshSchedule(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); },
   });
 }
 
@@ -45,7 +44,7 @@ export function useSetStock() {
   return useMutation({
     mutationFn: ({ id, pillsRemaining }: { id: string; pillsRemaining: number }) =>
       api.patch<Medication>(`/medications/${id}/stock`, { pillsRemaining }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); hardwareClient.refreshSchedule(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); },
   });
 }
 
@@ -54,7 +53,7 @@ export function useRecordDose() {
   return useMutation({
     mutationFn: ({ id, quantity }: { id: string; quantity?: number }) =>
       api.post<Medication>(`/medications/${id}/dose-taken`, quantity ? { quantity } : {}),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); hardwareClient.refreshSchedule(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: medKeys.all }); },
   });
 }
 

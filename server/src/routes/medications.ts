@@ -226,7 +226,7 @@ medicationRouter.get("/:id/dose-history", async (req, res) => {
     take: limit,
   });
   res.json(
-    logs.map((l) => ({
+    logs.map((l: { id: string; quantity: number; source: string; takenAt: Date }) => ({
       id: l.id,
       quantity: l.quantity,
       source: l.source,

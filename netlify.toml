@@ -4,7 +4,6 @@
 # To connect the frontend to your API:
 #   1. In the Netlify dashboard, add an environment variable:
 #      VITE_API_URL = https://your-backend.up.railway.app   (no trailing slash)
-#      VITE_MQTT_WS_URL = wss://broker.hivemq.com:8884/mqtt  (optional override)
 #   2. On the backend service set CLIENT_ORIGIN = https://your-site.netlify.app
 #      so CORS allows the frontend origin (credentials are required).
 

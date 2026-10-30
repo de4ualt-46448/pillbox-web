@@ -18,7 +18,6 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
   JWT_REFRESH_SECRET: z.string().min(1, "JWT_REFRESH_SECRET is required"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
-  MQTT_BROKER_URL: z.string().optional(),
   GROQ_API_KEY: z.string().default(""),
   GROQ_BASE_URL: z.string().default("https://api.groq.com/openai/v1"),
   GROQ_OCR_MODEL: z.string().default("qwen/qwen3.6-27b"),
@@ -41,7 +40,6 @@ const env = parsed.data;
 
 export const PORT = env.PORT;
 export const HOST = env.HOST;
-export const WS_PATH = "/ws/hardware";
 export const CLIENT_ORIGIN = env.CLIENT_ORIGIN;
 export const ELEVENLABS_API_KEY = env.ELEVENLABS_API_KEY;
 export const ELEVENLABS_BASE_URL = "https://api.elevenlabs.io/v1";
@@ -57,7 +55,6 @@ export const OPENROUTER_OCR_MODEL = env.OPENROUTER_OCR_MODEL;
 export const UPLOAD_DIR = env.UPLOAD_DIR;
 export const JWT_SECRET = env.JWT_SECRET;
 export const JWT_REFRESH_SECRET = env.JWT_REFRESH_SECRET;
-export const MQTT_BROKER_URL = env.MQTT_BROKER_URL;
 export const GROQ_API_KEY = env.GROQ_API_KEY;
 export const GROQ_BASE_URL = env.GROQ_BASE_URL;
 export const GROQ_OCR_MODEL = env.GROQ_OCR_MODEL;
