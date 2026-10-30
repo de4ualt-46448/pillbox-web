@@ -1,7 +1,7 @@
 # Netlify hosts both the Pillbox frontend and its Express API as a serverless function.
 
 [build]
-  command = "npm install --include=dev && npx prisma generate --schema server/prisma/schema.prisma && npm run build -w client"
+  command = "npm install --include=dev && npx prisma generate --schema server/prisma/schema.prisma && npx prisma db push --schema server/prisma/schema.prisma --skip-generate && npm run build -w client"
   publish = "client/dist"
 
 # Use a dedicated directory for Netlify Functions so the Firebase functions/
