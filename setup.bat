@@ -3,7 +3,7 @@ rem ===========================================================================
 rem  Pillbox — one-click setup for a FRESH Windows laptop (no programs yet).
 rem  Run this file by double-clicking it. It installs deps, builds the
 rem  local database, and starts both servers in their own windows.
-rem  Requires Node.js to be installed first (see requirements.txt).
+rem  Requires Node.js to be installed first (see SETUP.md).
 rem ===========================================================================
 cd /d "%~dp0"
 

@@ -9,7 +9,7 @@ rem      app AND the API on one port, so there is a single origin).
 rem   3. If Cloudflare Tunnel (cloudflared) is installed, opens a FREE
 rem      public HTTPS URL (no card, no domain needed). The ESP32 hardware
 rem      keeps working because the bridge talks to localhost:4000 locally.
-rem  Requires Node.js (see requirements.txt). Cloudflared is optional — if
+rem  Requires Node.js (see SETUP.md). Cloudflared is optional — if
 rem  missing, the script tells you how to install it (one command).
 rem ===========================================================================
 cd /d "%~dp0"
