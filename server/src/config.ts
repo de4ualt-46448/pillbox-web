@@ -14,7 +14,10 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().default(""),
   OPENROUTER_BASE_URL: z.string().default("https://openrouter.ai/api/v1"),
   OPENROUTER_OCR_MODEL: z.string().default("google/gemini-2.5-flash"),
-  UPLOAD_DIR: z.string().default("uploads"),
+  // Lambda's deployed code directory is read-only; its writable /tmp storage is ephemeral.
+  UPLOAD_DIR: z.string().default(
+    process.env.AWS_LAMBDA_FUNCTION_NAME ? "/tmp/pillbox-uploads" : "uploads",
+  ),
   JWT_SECRET: z.string().min(1, "JWT_SECRET is required"),
   JWT_REFRESH_SECRET: z.string().min(1, "JWT_REFRESH_SECRET is required"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
