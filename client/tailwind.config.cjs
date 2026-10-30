@@ -1,5 +1,5 @@
 /** Tailwind config — palette extracted from the Android Color.kt / Theme.kt. */
-export default {
+module.exports = {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
